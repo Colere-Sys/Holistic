@@ -181,15 +181,24 @@ public class PipelineOverviewDashboard extends View {
     public void doData(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
         Jenkins.get().checkPermission(Jenkins.READ);
 
-        OverviewDataService service = new OverviewDataService();
-        JSONObject result = service.fetchDashboardData(getGroups(), historyDays);
-
-        result.put("viewName", getDashboardTitle());
-        result.put("headerMessage", getHeaderMessage());
-
         rsp.setContentType("application/json;charset=UTF-8");
         rsp.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-        rsp.getWriter().write(result.toString());
+
+        try {
+            OverviewDataService service = new OverviewDataService();
+            JSONObject result = service.fetchDashboardData(getGroups(), historyDays);
+
+            result.put("viewName", getDashboardTitle());
+            result.put("headerMessage", getHeaderMessage());
+
+            rsp.getWriter().write(result.toString());
+        } catch (Exception e) {
+            LOGGER.log(Level.SEVERE, "Failed to build dashboard data", e);
+            JSONObject error = new JSONObject();
+            error.put("error", e.getMessage());
+            error.put("timestamp", System.currentTimeMillis());
+            rsp.getWriter().write(error.toString());
+        }
     }
 
     /* ===== Descriptor ===== */

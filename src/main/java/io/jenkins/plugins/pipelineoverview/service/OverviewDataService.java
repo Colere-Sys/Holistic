@@ -2,32 +2,40 @@ package io.jenkins.plugins.pipelineoverview.service;
 
 import com.cloudbees.workflow.rest.external.RunExt;
 import com.cloudbees.workflow.rest.external.StageNodeExt;
+import com.cloudbees.workflow.rest.external.StatusExt;
 import hudson.model.Computer;
 import hudson.model.Item;
-import hudson.model.Result;
+import hudson.model.Queue;
+import hudson.slaves.Cloud;
 import io.jenkins.plugins.pipelineoverview.DashboardEntry;
 import io.jenkins.plugins.pipelineoverview.DashboardGroup;
-import io.jenkins.plugins.pipelineoverview.model.FailureInfo;
-import io.jenkins.plugins.pipelineoverview.model.PipelineHealth;
-import io.jenkins.plugins.pipelineoverview.model.StagePerformance;
 import jenkins.model.Jenkins;
 import net.sf.json.JSONArray;
 import net.sf.json.JSONObject;
+import org.jenkinsci.plugins.workflow.actions.ThreadNameAction;
+import org.jenkinsci.plugins.workflow.flow.FlowExecution;
+import org.jenkinsci.plugins.workflow.graph.BlockStartNode;
+import org.jenkinsci.plugins.workflow.graph.FlowNode;
 import org.jenkinsci.plugins.workflow.job.WorkflowJob;
 import org.jenkinsci.plugins.workflow.job.WorkflowRun;
 
-import java.util.*;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Deque;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Aggregates build history, computes success rates, trends, failure
- * streaks, and stage performance data for all configured pipelines.
- * <p>
- * Build records are cached per-pipeline with a short TTL to avoid
- * repeatedly scanning Jenkins build directories when multiple users
- * (or the auto-refresh) hit the dashboard in quick succession.
+ * Builds the JSON payload consumed by the v2 dashboard frontend.
+ * Computes per-pipeline latest-run topology, currently-broken cards with
+ * regression context, leaf-stage outbreak clustering, queue + agents +
+ * locks state, and aggregate KPIs.
  */
 public class OverviewDataService {
 
@@ -35,421 +43,454 @@ public class OverviewDataService {
             Logger.getLogger(OverviewDataService.class.getName());
 
     private static final long DAY_MS = 24L * 60 * 60 * 1000;
-    private static final int SPARKLINE_DAYS = 14;
+    private static final long WEEK_MS = 7 * DAY_MS;
     private static final int MAX_BUILDS_PER_PIPELINE = 200;
-    private static final int STAGE_SAMPLE_BUILDS = 5;
-    private static final int TOP_SLOW_STAGES = 5;
+    private static final int EXEC_TIMES_LEN = 30;
+    private static final int HISTORY_DOTS_LEN = 15;
+    private static final int QUEUE_HISTORY_LEN = 60;
+    private static final long REGRESSION_WINDOW_MS = 24 * 60 * 60 * 1000L;
+    private static final long REGRESSION_MIN_GREEN_MS = 6 * 60 * 60 * 1000L;
+    private static final long LOCK_WARN_MS = 15 * 60 * 1000L;
 
-    /* ---------- per-pipeline build-record cache ---------- */
+    /* ---------- caches ---------- */
 
     private static final Map<String, CachedBuilds> BUILD_CACHE = new ConcurrentHashMap<>();
     private static final long BUILD_CACHE_TTL_MS = 15_000;
 
-    /* ---------- per-build stage cache (completed only) --- */
+    private static final Map<String, JSONArray> STAGE_TOPO_CACHE = new ConcurrentHashMap<>();
 
-    private static final Map<String, List<StageRecord>> STAGE_CACHE = new ConcurrentHashMap<>();
+    private static final Deque<Integer> QUEUE_HISTORY = new ArrayDeque<>(QUEUE_HISTORY_LEN);
 
     /* ===================================================== */
 
-    /**
-     * Produces the full JSON payload consumed by the frontend.
-     */
     public JSONObject fetchDashboardData(List<DashboardGroup> groups, int historyDays) {
-        Jenkins jenkins = Jenkins.get();
         long now = System.currentTimeMillis();
+        Jenkins jenkins = Jenkins.get();
 
-        List<PipelineHealth> healths = new ArrayList<>();
-        List<FailureInfo> failures = new ArrayList<>();
-        /* job:stage -> list of durations */
-        Map<String, StageDurationAccumulator> stageAccum = new LinkedHashMap<>();
-
-        int buildsToday = 0;
-        int buildsThisWeek = 0;
-        long durationSum = 0;
-        int durationCount = 0;
-
-        long todayStart = startOfDay(now);
-        long weekStart = todayStart - 6 * DAY_MS;
-        long sevenDaysAgo = now - 7 * DAY_MS;
-
+        // 1. Collect per-pipeline data
+        Map<String, PipelineSnapshot> snaps = new LinkedHashMap<>();
+        Map<String, String> jobToGroup = new LinkedHashMap<>();
         for (DashboardGroup group : groups) {
             for (DashboardEntry entry : group.getPipelines()) {
                 if (!entry.isEnabled()) continue;
-
-                PipelineHealth health = processPipeline(
-                        jenkins, group.getName(), entry, now, historyDays);
-                if (health == null) continue;   // permission denied
-                healths.add(health);
-
-                /* aggregate KPIs */
-                for (int v : health.getDailyBuilds()) {
-                    /* dailyBuilds is 14 days; today is index 13 */
+                jobToGroup.put(entry.getJobName(), group.getName());
+                try {
+                    PipelineSnapshot snap = collectPipelineSnapshot(jenkins, entry, group.getName(), now, historyDays);
+                    if (snap != null) snaps.put(entry.getJobName(), snap);
+                } catch (Exception e) {
+                    LOGGER.log(Level.WARNING, "Failed to collect snapshot for " + entry.getJobName(), e);
                 }
-                buildsToday += health.getDailyBuilds()[SPARKLINE_DAYS - 1];
-                for (int i = Math.max(0, SPARKLINE_DAYS - 7); i < SPARKLINE_DAYS; i++) {
-                    buildsThisWeek += health.getDailyBuilds()[i];
+            }
+        }
+
+        // 2. Aggregate week stats + categorize
+        long sevenDaysAgo = now - WEEK_MS;
+        long fourteenDaysAgo = now - 2 * WEEK_MS;
+        int totalThisWeek = 0, successThisWeek = 0;
+        int totalLastWeek = 0, successLastWeek = 0;
+
+        List<PipelineSnapshot> broken = new ArrayList<>();
+        List<PipelineSnapshot> unstableList = new ArrayList<>();
+        int buildingCount = 0;
+
+        for (PipelineSnapshot p : snaps.values()) {
+            for (BuildRecord r : p.records) {
+                if (r.building) continue;
+                if (r.startTimeMs >= sevenDaysAgo) {
+                    totalThisWeek++;
+                    if ("SUCCESS".equals(r.result)) successThisWeek++;
+                } else if (r.startTimeMs >= fourteenDaysAgo) {
+                    totalLastWeek++;
+                    if ("SUCCESS".equals(r.result)) successLastWeek++;
                 }
-                if (health.getAvgDurationMs() > 0) {
-                    durationSum += health.getAvgDurationMs();
-                    durationCount++;
-                }
+            }
+            if ("FAILURE".equals(p.lastResult)) broken.add(p);
+            if ("UNSTABLE".equals(p.lastResult)) unstableList.add(p);
+            if (p.building) buildingCount++;
+        }
 
-                /* current failures */
-                if ("FAILURE".equals(health.getLastStatus())) {
-                    failures.add(buildFailureInfo(jenkins, group.getName(), entry, now, historyDays));
-                }
+        double weekRate = totalThisWeek > 0 ? (successThisWeek * 100.0 / totalThisWeek) : 100.0;
+        double weekRateLast = totalLastWeek > 0 ? (successLastWeek * 100.0 / totalLastWeek) : 100.0;
 
-                /* stage performance (sample recent successful builds) */
-                collectStagePerformance(jenkins, entry, stageAccum, now, historyDays);
+        // 3. Detect regressions: broken pipelines that were green for at least REGRESSION_MIN_GREEN_MS
+        //    and broke within REGRESSION_WINDOW_MS
+        List<JSONObject> regressions = new ArrayList<>();
+        for (PipelineSnapshot p : broken) {
+            if (p.brokeAtMs == 0 || p.lastGreenTimeMs == 0) continue;
+            long greenDuration = p.brokeAtMs - p.lastGreenTimeMs;
+            long brokeAge = now - p.brokeAtMs;
+            if (greenDuration >= REGRESSION_MIN_GREEN_MS && brokeAge <= REGRESSION_WINDOW_MS) {
+                JSONObject r = new JSONObject();
+                r.put("jobName", p.jobName);
+                r.put("displayName", p.displayName);
+                r.put("greenDurationMs", greenDuration);
+                r.put("brokeAtMs", p.brokeAtMs);
+                r.put("failedStage", p.failedStageName != null ? p.failedStageName : "");
+                r.put("buildNumber", p.lastBuildNumber);
+                r.put("buildUrl", p.lastBuildUrl);
+                regressions.add(r);
             }
         }
+        regressions.sort((a, b) -> Long.compare(b.getLong("brokeAtMs"), a.getLong("brokeAtMs")));
 
-        /* ---------- top slowest stages ---------- */
-        List<StagePerformance> slowStages = computeTopSlowStages(stageAccum, TOP_SLOW_STAGES);
-
-        /* ---------- stale pipelines ---------- */
-        long staleThreshold = now - 7 * DAY_MS;
-        JSONArray stalePipelines = new JSONArray();
-        for (PipelineHealth h : healths) {
-            if (h.getLastBuildTimeMs() > 0 && h.getLastBuildTimeMs() < staleThreshold
-                    && !"NO_BUILDS".equals(h.getLastStatus())
-                    && !"NOT_FOUND".equals(h.getLastStatus())
-                    && !"NOT_A_PIPELINE".equals(h.getLastStatus())) {
-                JSONObject sp = new JSONObject();
-                sp.put("jobName", h.toJSON().get("jobName"));
-                sp.put("displayName", h.toJSON().get("displayName"));
-                sp.put("lastBuildTimeMs", h.getLastBuildTimeMs());
-                sp.put("daysSinceLastBuild",
-                        (int) ((now - h.getLastBuildTimeMs()) / DAY_MS));
-                stalePipelines.add(sp);
-            }
+        // 4. Outbreaks: cluster broken by leaf failed stage (≥2 pipelines)
+        Map<String, List<String>> stageToNames = new LinkedHashMap<>();
+        for (PipelineSnapshot p : broken) {
+            String stage = p.failedStageName;
+            if (stage == null || stage.isEmpty()) continue;
+            stageToNames.computeIfAbsent(stage, k -> new ArrayList<>()).add(p.displayName);
         }
-
-        /* ---------- infrastructure ---------- */
-        int queueSize = jenkins.getQueue().getItems().length;
-        int busyExecutors = 0, totalExecutors = 0;
-        for (Computer c : jenkins.getComputers()) {
-            if (c.isOnline()) {
-                totalExecutors += c.getNumExecutors();
-                busyExecutors += c.countBusy();
-            }
+        List<JSONObject> outbreaksList = new ArrayList<>();
+        for (Map.Entry<String, List<String>> e : stageToNames.entrySet()) {
+            if (e.getValue().size() < 2) continue;
+            JSONObject c = new JSONObject();
+            c.put("stageName", e.getKey());
+            c.put("count", e.getValue().size());
+            JSONArray pl = new JSONArray();
+            pl.addAll(e.getValue());
+            c.put("pipelines", pl);
+            outbreaksList.add(c);
         }
+        outbreaksList.sort((a, b) -> b.getInt("count") - a.getInt("count"));
 
-        /* ---------- overall success rate (7d) ---------- */
-        int total7d = 0, success7d = 0;
-        for (PipelineHealth h : healths) {
-            total7d += h.getTotalBuilds7d();
-            /* approximate by rate * count */
-            for (int i = Math.max(0, SPARKLINE_DAYS - 7); i < SPARKLINE_DAYS; i++) {
-                int db = h.getDailyBuilds()[i];
-                double sr = h.getDailySuccessRate()[i];
-                success7d += (int) Math.round(db * sr / 100.0);
-            }
+        // 5. Queue
+        Queue.Item[] queueItems = Queue.getInstance().getItems();
+        long avgWaitMs = 0;
+        if (queueItems.length > 0) {
+            long sum = 0;
+            for (Queue.Item qi : queueItems) sum += now - qi.getInQueueSince();
+            avgWaitMs = sum / queueItems.length;
         }
-        double overallSuccessRate = total7d > 0 ? (success7d * 100.0 / total7d) : 100.0;
+        sampleQueueHistory(queueItems.length);
 
-        /* ---------- aggregate daily sparklines ---------- */
-        int[] aggDailyBuilds = new int[SPARKLINE_DAYS];
-        double[] aggDailySuccess = new double[SPARKLINE_DAYS];
-        int[] aggDailyTotal = new int[SPARKLINE_DAYS];
-        int[] aggDailySuccessCount = new int[SPARKLINE_DAYS];
-        for (PipelineHealth h : healths) {
-            for (int i = 0; i < SPARKLINE_DAYS; i++) {
-                aggDailyBuilds[i] += h.getDailyBuilds()[i];
-                int db = h.getDailyBuilds()[i];
-                aggDailyTotal[i] += db;
-                aggDailySuccessCount[i] += (int) Math.round(db * h.getDailySuccessRate()[i] / 100.0);
-            }
-        }
-        for (int i = 0; i < SPARKLINE_DAYS; i++) {
-            aggDailySuccess[i] = aggDailyTotal[i] > 0
-                    ? (aggDailySuccessCount[i] * 100.0 / aggDailyTotal[i]) : 100.0;
-        }
+        // 6. Agents
+        JSONObject agentsJson = listAgents(jenkins);
+        int agentsHealthy = countHealthyAgents(agentsJson);
+        int agentsTotal = countTotalAgents(agentsJson);
 
-        /* ---------- count statuses ---------- */
-        int healthyCount = 0, failingCount = 0, unstableCount = 0, activePipelines = 0;
-        for (PipelineHealth h : healths) {
-            String s = h.getLastStatus();
-            if ("NOT_FOUND".equals(s) || "NOT_A_PIPELINE".equals(s) || "NO_BUILDS".equals(s)) continue;
-            activePipelines++;
-            if ("SUCCESS".equals(s)) healthyCount++;
-            else if ("FAILURE".equals(s)) failingCount++;
-            else if ("UNSTABLE".equals(s)) unstableCount++;
-        }
-
-        /* ========== build JSON response ========== */
+        // 7. Build response
         JSONObject result = new JSONObject();
         result.put("timestamp", now);
 
         JSONObject summary = new JSONObject();
-        summary.put("totalPipelines", activePipelines);
-        summary.put("healthyPipelines", healthyCount);
-        summary.put("failingPipelines", failingCount);
-        summary.put("unstablePipelines", unstableCount);
-        summary.put("overallSuccessRate", Math.round(overallSuccessRate * 10.0) / 10.0);
-        summary.put("buildsToday", buildsToday);
-        summary.put("buildsThisWeek", buildsThisWeek);
-        summary.put("avgBuildDurationMs",
-                durationCount > 0 ? durationSum / durationCount : 0);
-        summary.put("queueSize", queueSize);
-        summary.put("busyExecutors", busyExecutors);
-        summary.put("totalExecutors", totalExecutors);
-
-        JSONArray aggDB = new JSONArray();
-        for (int v : aggDailyBuilds) aggDB.add(v);
-        summary.put("dailyBuilds", aggDB);
-        JSONArray aggDS = new JSONArray();
-        for (double v : aggDailySuccess) aggDS.add(Math.round(v * 10.0) / 10.0);
-        summary.put("dailySuccessRate", aggDS);
-
+        summary.put("weekSuccessRate", round1(weekRate));
+        summary.put("weekSuccessRateLastWeek", round1(weekRateLast));
+        summary.put("downCount", broken.size());
+        summary.put("unstableCount", unstableList.size());
+        summary.put("buildingCount", buildingCount);
+        summary.put("outbreakCount", outbreaksList.size());
+        summary.put("queueSize", queueItems.length);
+        summary.put("avgQueueWaitMs", avgWaitMs);
+        summary.put("agentsHealthy", agentsHealthy);
+        summary.put("agentsTotal", agentsTotal);
         result.put("summary", summary);
 
-        JSONArray pArr = new JSONArray();
-        for (PipelineHealth h : healths) pArr.add(h.toJSON());
-        result.put("pipelines", pArr);
+        JSONArray outbreaksArr = new JSONArray();
+        outbreaksArr.addAll(outbreaksList);
+        result.put("outbreaks", outbreaksArr);
 
-        JSONArray fArr = new JSONArray();
-        for (FailureInfo f : failures) fArr.add(f.toJSON());
-        result.put("currentFailures", fArr);
+        JSONArray regArr = new JSONArray();
+        regArr.addAll(regressions);
+        result.put("regressions", regArr);
 
-        JSONArray sArr = new JSONArray();
-        for (StagePerformance s : slowStages) sArr.add(s.toJSON());
-        result.put("slowestStages", sArr);
+        // Broken cards (sorted by sinceGreen desc)
+        List<PipelineSnapshot> brokenSorted = new ArrayList<>(broken);
+        brokenSorted.sort(Comparator.comparingLong((PipelineSnapshot p) -> {
+            long sinceGreen = (p.brokeAtMs > 0) ? (now - p.lastGreenTimeMs) : 0;
+            return -sinceGreen;
+        }));
+        JSONArray brokenArr = new JSONArray();
+        for (PipelineSnapshot p : brokenSorted) brokenArr.add(brokenToJSON(p, now));
+        result.put("broken", brokenArr);
 
-        result.put("stalePipelines", stalePipelines);
+        // Groups → pipelines (skip pipelines with no recent runs)
+        int hiddenInactive = 0;
+        JSONArray groupsArr = new JSONArray();
+        for (DashboardGroup group : groups) {
+            JSONObject g = new JSONObject();
+            g.put("name", group.getName());
+            JSONArray ps = new JSONArray();
+            for (DashboardEntry entry : group.getPipelines()) {
+                if (!entry.isEnabled()) continue;
+                PipelineSnapshot p = snaps.get(entry.getJobName());
+                if (p == null) continue;
+                if (p.records.isEmpty()) { hiddenInactive++; continue; }
+                ps.add(pipelineToJSON(p));
+            }
+            g.put("pipelines", ps);
+            groupsArr.add(g);
+        }
+        result.put("groups", groupsArr);
+        result.put("hiddenInactive", hiddenInactive);
+
+        // Queue history sparkline
+        JSONArray qh = new JSONArray();
+        synchronized (QUEUE_HISTORY) {
+            for (Integer v : QUEUE_HISTORY) qh.add(v);
+        }
+        result.put("queueHistory", qh);
+
+        // Locks
+        result.put("locks", listLocks(now));
+
+        // Unstable list (sort by count desc)
+        unstableList.sort((a, b) -> b.unstableCount7d - a.unstableCount7d);
+        JSONArray unArr = new JSONArray();
+        for (PipelineSnapshot p : unstableList) {
+            if (p.totalBuilds7d == 0) continue;
+            JSONObject u = new JSONObject();
+            u.put("jobName", p.jobName);
+            u.put("displayName", p.displayName);
+            u.put("unstableCount", p.unstableCount7d);
+            u.put("totalCount", p.totalBuilds7d);
+            unArr.add(u);
+        }
+        result.put("unstable", unArr);
+
+        result.put("agents", agentsJson);
 
         evictStaleCache();
         return result;
     }
 
     /* ===================================================== */
-    /*  Per-pipeline processing                              */
+    /*  Per-pipeline collection                              */
     /* ===================================================== */
 
-    private PipelineHealth processPipeline(
-            Jenkins jenkins, String groupName, DashboardEntry entry,
+    private PipelineSnapshot collectPipelineSnapshot(
+            Jenkins jenkins, DashboardEntry entry, String groupName,
             long now, int historyDays) {
 
-        String jobFullName = entry.getJobName();
-        String displayName = entry.getEffectiveDisplayName();
-
-        Item item = jenkins.getItemByFullName(jobFullName);
-        if (item == null) {
-            return placeholderHealth(jobFullName, displayName, groupName, "NOT_FOUND");
-        }
-        if (!item.hasPermission(Item.READ)) {
-            return null;
-        }
-        if (!(item instanceof WorkflowJob)) {
-            return placeholderHealth(jobFullName, displayName, groupName, "NOT_A_PIPELINE");
-        }
+        Item item = jenkins.getItemByFullName(entry.getJobName());
+        if (!(item instanceof WorkflowJob)) return null;
+        if (!item.hasPermission(Item.READ)) return null;
 
         WorkflowJob job = (WorkflowJob) item;
         List<BuildRecord> records = fetchBuildRecords(job, now, historyDays);
 
-        if (records.isEmpty()) {
-            return placeholderHealth(jobFullName, displayName, groupName, "NO_BUILDS");
-        }
+        PipelineSnapshot snap = new PipelineSnapshot();
+        snap.jobName = entry.getJobName();
+        snap.displayName = entry.getEffectiveDisplayName();
+        snap.groupName = groupName;
+        snap.records = records;
 
-        /* ---- latest build ---- */
+        if (records.isEmpty()) return snap;
+
         BuildRecord latest = records.get(0);
-        String lastStatus = latest.building ? "BUILDING" : latest.result;
-        String lastBuildUrl = buildAbsoluteUrl(job, latest.number);
+        snap.lastBuildNumber = latest.number;
+        snap.lastBuildUrl = buildAbsoluteUrl(job, latest.number);
+        snap.lastBuildTimeMs = latest.startTimeMs;
+        snap.building = latest.building;
+        snap.lastResult = latest.building ? "BUILDING" : (latest.result != null ? latest.result : "UNKNOWN");
 
-        /* ---- daily buckets (14 days) ---- */
-        int[] dailyBuilds = new int[SPARKLINE_DAYS];
-        int[] dailySuccess = new int[SPARKLINE_DAYS];
-        int total7d = 0, success7d = 0, total30d = 0, success30d = 0;
-        long durationSum = 0;
-        int durationCount = 0;
-        long sevenDaysAgo = now - 7 * DAY_MS;
-        long thirtyDaysAgo = now - 30 * DAY_MS;
+        // Latest run topology (cached per build #)
+        snap.stagesTopology = getStageTopology(job, latest.number);
 
+        // 7d totals + unstable count
+        long sevenAgo = now - WEEK_MS;
         for (BuildRecord r : records) {
             if (r.building) continue;
-
-            /* sparkline bucket */
-            int daysAgo = (int) ((now - r.startTimeMs) / DAY_MS);
-            if (daysAgo >= 0 && daysAgo < SPARKLINE_DAYS) {
-                int idx = SPARKLINE_DAYS - 1 - daysAgo;
-                dailyBuilds[idx]++;
-                if ("SUCCESS".equals(r.result)) dailySuccess[idx]++;
-            }
-
-            /* 7-day window */
-            if (r.startTimeMs >= sevenDaysAgo) {
-                total7d++;
-                if ("SUCCESS".equals(r.result)) success7d++;
-            }
-
-            /* 30-day window */
-            if (r.startTimeMs >= thirtyDaysAgo) {
-                total30d++;
-                if ("SUCCESS".equals(r.result)) success30d++;
-            }
-
-            /* duration (exclude very short builds < 1s as likely aborted) */
-            if (r.durationMs > 1000) {
-                durationSum += r.durationMs;
-                durationCount++;
+            if (r.startTimeMs >= sevenAgo) {
+                snap.totalBuilds7d++;
+                if ("UNSTABLE".equals(r.result)) snap.unstableCount7d++;
             }
         }
 
-        double[] dailySuccessRate = new double[SPARKLINE_DAYS];
-        for (int i = 0; i < SPARKLINE_DAYS; i++) {
-            dailySuccessRate[i] = dailyBuilds[i] > 0
-                    ? (dailySuccess[i] * 100.0 / dailyBuilds[i]) : 100.0;
+        // Successful build durations (oldest → newest, last EXEC_TIMES_LEN)
+        snap.successDurationsSec = extractSuccessDurations(records);
+
+        // History dots (last HISTORY_DOTS_LEN, oldest → newest)
+        snap.historyDots = extractHistoryDots(records);
+
+        // If currently failing: find regression context
+        if ("FAILURE".equals(snap.lastResult)) {
+            int consecutive = 0;
+            long brokeAt = latest.startTimeMs;
+            int lastGreenBuild = 0;
+            long lastGreenTime = 0;
+            for (BuildRecord r : records) {
+                if (r.building) continue;
+                if ("FAILURE".equals(r.result)) {
+                    consecutive++;
+                    brokeAt = r.startTimeMs;
+                } else if ("SUCCESS".equals(r.result)) {
+                    lastGreenBuild = r.number;
+                    lastGreenTime = r.startTimeMs;
+                    break;
+                }
+            }
+            snap.consecutiveFailures = consecutive;
+            snap.brokeAtMs = brokeAt;
+            snap.lastGreenBuildNumber = lastGreenBuild;
+            snap.lastGreenTimeMs = lastGreenTime;
+            snap.failedStage = findFailedStage(snap.stagesTopology);
+            if (snap.failedStage != null) {
+                snap.failedStageName = snap.failedStage.optString("name", null);
+            }
         }
 
-        double successRate7d = total7d > 0 ? (success7d * 100.0 / total7d) : 100.0;
-        double successRate30d = total30d > 0 ? (success30d * 100.0 / total30d) : 100.0;
-        long avgDuration = durationCount > 0 ? durationSum / durationCount : 0;
-
-        /* ---- trends ---- */
-        String successTrend = computeTrend(dailySuccessRate);
-        String durationTrend = computeDurationTrend(records, now);
-
-        return new PipelineHealth(
-                jobFullName, displayName, groupName,
-                lastStatus, latest.number, lastBuildUrl,
-                latest.startTimeMs,
-                successRate7d, successRate30d,
-                total7d, total30d,
-                avgDuration,
-                durationTrend, successTrend,
-                dailyBuilds, dailySuccessRate,
-                latest.building);
+        return snap;
     }
 
     /* ===================================================== */
-    /*  Failure info                                         */
+    /*  Stage topology — flat list with parallel detection   */
     /* ===================================================== */
 
-    private FailureInfo buildFailureInfo(
-            Jenkins jenkins, String groupName, DashboardEntry entry,
-            long now, int historyDays) {
+    private JSONArray getStageTopology(WorkflowJob job, int buildNumber) {
+        if (buildNumber <= 0) return new JSONArray();
+        String key = job.getFullName() + "#" + buildNumber;
+        JSONArray cached = STAGE_TOPO_CACHE.get(key);
+        if (cached != null) return cached;
 
-        String jobFullName = entry.getJobName();
-        String displayName = entry.getEffectiveDisplayName();
-        Item item = jenkins.getItemByFullName(jobFullName);
-        if (!(item instanceof WorkflowJob)) {
-            return new FailureInfo(jobFullName, displayName, groupName,
-                    null, now, 0, "", 1);
+        JSONArray topology = new JSONArray();
+        try {
+            WorkflowRun run = job.getBuildByNumber(buildNumber);
+            if (run == null) return topology;
+            FlowExecution exec = run.getExecution();
+
+            RunExt runExt = RunExt.create(run);
+            List<StageNodeExt> stages = runExt.getStages();
+            if (stages == null || stages.isEmpty()) return topology;
+
+            // Group parallel branches by their enclosing parallel block id.
+            // A "parallel branch" is a FlowNode with a ThreadNameAction; its first
+            // enclosing BlockStartNode is the parallel block start.
+            Map<String, JSONObject> parallelByParent = new LinkedHashMap<>();
+            for (StageNodeExt s : stages) {
+                String stageName = s.getName();
+                String status = mapStageStatus(s.getStatus());
+
+                FlowNode node = null;
+                if (exec != null) {
+                    try { node = exec.getNode(s.getId()); } catch (Exception ignored) {}
+                }
+
+                String parallelParentId = null;
+                if (node != null && node.getAction(ThreadNameAction.class) != null) {
+                    List<BlockStartNode> enclosing = node.getEnclosingBlocks();
+                    if (enclosing != null && !enclosing.isEmpty()) {
+                        parallelParentId = enclosing.get(0).getId();
+                    } else {
+                        parallelParentId = "anonymous-parallel";
+                    }
+                }
+
+                if (parallelParentId != null) {
+                    JSONObject parallelObj = parallelByParent.get(parallelParentId);
+                    if (parallelObj == null) {
+                        parallelObj = new JSONObject();
+                        parallelObj.put("type", "parallel");
+                        parallelObj.put("children", new JSONArray());
+                        topology.add(parallelObj);
+                        parallelByParent.put(parallelParentId, parallelObj);
+                    }
+                    JSONObject branch = new JSONObject();
+                    branch.put("name", stageName);
+                    branch.put("status", status);
+                    parallelObj.getJSONArray("children").add(branch);
+                } else {
+                    JSONObject cell = new JSONObject();
+                    cell.put("type", "seq");
+                    cell.put("name", stageName);
+                    cell.put("status", status);
+                    topology.add(cell);
+                }
+            }
+
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING,
+                    "Failed to build stage topology for " + job.getFullName() + " #" + buildNumber, e);
         }
 
-        WorkflowJob job = (WorkflowJob) item;
-        List<BuildRecord> records = fetchBuildRecords(job, now, historyDays);
+        STAGE_TOPO_CACHE.put(key, topology);
+        return topology;
+    }
 
-        /* count consecutive failures */
-        int consecutive = 0;
-        long failedSince = now;
-        int failedBuildNumber = 0;
-        for (BuildRecord r : records) {
-            if (r.building) continue;
-            if ("FAILURE".equals(r.result)) {
-                consecutive++;
-                failedSince = r.startTimeMs;
-                if (failedBuildNumber == 0) failedBuildNumber = r.number;
+    private String mapStageStatus(StatusExt status) {
+        if (status == null) return "skipped";
+        switch (status) {
+            case SUCCESS: return "ok";
+            case FAILED:  return "fail";
+            case UNSTABLE: return "unstable";
+            case IN_PROGRESS: return "building";
+            case PAUSED_PENDING_INPUT: return "building";
+            case ABORTED: return "skipped";
+            case NOT_EXECUTED: return "skipped";
+            default: return "skipped";
+        }
+    }
+
+    private JSONObject findFailedStage(JSONArray topology) {
+        for (int i = 0; i < topology.size(); i++) {
+            JSONObject node = topology.getJSONObject(i);
+            if ("parallel".equals(node.optString("type"))) {
+                JSONArray children = node.optJSONArray("children");
+                if (children == null || children.isEmpty()) continue;
+                List<JSONObject> failed = new ArrayList<>();
+                for (int j = 0; j < children.size(); j++) {
+                    JSONObject c = children.getJSONObject(j);
+                    if ("fail".equals(c.optString("status"))) failed.add(c);
+                }
+                if (!failed.isEmpty()) {
+                    // Use the parallel block's first child name as a representative,
+                    // OR keep the parent name if available. We don't have parent name
+                    // in the topology, so use the first failed branch's name as the
+                    // stage label to cluster on. Better: take the longest common prefix.
+                    JSONObject result = new JSONObject();
+                    String repr = pickParallelLabel(children);
+                    result.put("name", repr);
+                    result.put("isParallel", true);
+                    JSONArray branches = new JSONArray();
+                    for (int j = 0; j < children.size(); j++) {
+                        JSONObject c = children.getJSONObject(j);
+                        JSONObject b = new JSONObject();
+                        b.put("name", c.getString("name"));
+                        b.put("status", "fail".equals(c.optString("status")) ? "FAILED" : c.optString("status"));
+                        branches.add(b);
+                    }
+                    result.put("branches", branches);
+                    return result;
+                }
             } else {
-                break;
+                if ("fail".equals(node.optString("status"))) {
+                    JSONObject result = new JSONObject();
+                    result.put("name", node.getString("name"));
+                    result.put("isParallel", false);
+                    return result;
+                }
             }
-        }
-
-        /* find which stage failed in the latest failed build */
-        String failedStage = findFailedStage(job, failedBuildNumber);
-
-        return new FailureInfo(
-                jobFullName, displayName, groupName,
-                failedStage, failedSince,
-                failedBuildNumber, buildAbsoluteUrl(job, failedBuildNumber),
-                consecutive);
-    }
-
-    private String findFailedStage(WorkflowJob job, int buildNumber) {
-        if (buildNumber <= 0) return null;
-
-        String cacheKey = job.getFullName() + "#" + buildNumber;
-        List<StageRecord> stages = STAGE_CACHE.get(cacheKey);
-        if (stages == null) {
-            stages = fetchStageRecords(job, buildNumber);
-            if (stages != null) {
-                STAGE_CACHE.put(cacheKey, stages);
-            }
-        }
-        if (stages == null) return null;
-
-        for (StageRecord s : stages) {
-            if ("FAILED".equals(s.status)) return s.name;
         }
         return null;
     }
 
-    /* ===================================================== */
-    /*  Stage performance                                    */
-    /* ===================================================== */
-
-    private void collectStagePerformance(
-            Jenkins jenkins, DashboardEntry entry,
-            Map<String, StageDurationAccumulator> accum,
-            long now, int historyDays) {
-
-        Item item = jenkins.getItemByFullName(entry.getJobName());
-        if (!(item instanceof WorkflowJob)) return;
-
-        WorkflowJob job = (WorkflowJob) item;
-        List<BuildRecord> records = fetchBuildRecords(job, now, historyDays);
-
-        int sampled = 0;
-        for (BuildRecord r : records) {
-            if (r.building) continue;
-            if (!"SUCCESS".equals(r.result) && !"UNSTABLE".equals(r.result)) continue;
-            if (sampled >= STAGE_SAMPLE_BUILDS) break;
-
-            String cacheKey = job.getFullName() + "#" + r.number;
-            List<StageRecord> stages = STAGE_CACHE.get(cacheKey);
-            if (stages == null) {
-                stages = fetchStageRecords(job, r.number);
-                if (stages != null) STAGE_CACHE.put(cacheKey, stages);
+    /** Pick a representative label for a parallel block. Uses the longest common prefix
+     *  (Jenkins-style "Block / Branch" naming) or falls back to the first child's name. */
+    private String pickParallelLabel(JSONArray children) {
+        if (children == null || children.isEmpty()) return "";
+        String first = children.getJSONObject(0).getString("name");
+        // If all children have the form "X / Y" with the same X, return X.
+        String prefix = first.contains(" / ") ? first.substring(0, first.indexOf(" / ")) : null;
+        if (prefix != null) {
+            for (int i = 1; i < children.size(); i++) {
+                String n = children.getJSONObject(i).getString("name");
+                if (!n.startsWith(prefix + " / ")) { prefix = null; break; }
             }
-            if (stages == null) continue;
-
-            for (StageRecord s : stages) {
-                String key = entry.getEffectiveDisplayName() + ":" + s.name;
-                accum.computeIfAbsent(key, k ->
-                        new StageDurationAccumulator(
-                                entry.getJobName(), entry.getEffectiveDisplayName(), s.name));
-                accum.get(key).add(s.durationMs);
-            }
-            sampled++;
+            if (prefix != null) return prefix;
         }
-    }
-
-    private List<StagePerformance> computeTopSlowStages(
-            Map<String, StageDurationAccumulator> accum, int limit) {
-        List<StagePerformance> all = new ArrayList<>();
-        for (StageDurationAccumulator a : accum.values()) {
-            all.add(a.toStagePerformance());
-        }
-        all.sort((a, b) -> Long.compare(b.getAvgDurationMs(), a.getAvgDurationMs()));
-        return all.subList(0, Math.min(limit, all.size()));
+        return first;
     }
 
     /* ===================================================== */
-    /*  Build record fetching & caching                      */
+    /*  Build record fetching                                */
     /* ===================================================== */
 
-    private List<BuildRecord> fetchBuildRecords(
-            WorkflowJob job, long now, int historyDays) {
-
+    private List<BuildRecord> fetchBuildRecords(WorkflowJob job, long now, int historyDays) {
         String cacheKey = job.getFullName();
         CachedBuilds cached = BUILD_CACHE.get(cacheKey);
-        if (cached != null && !cached.isExpired()) {
-            return cached.records;
-        }
+        if (cached != null && !cached.isExpired()) return cached.records;
 
         List<BuildRecord> records = new ArrayList<>();
         long cutoff = now - (historyDays * DAY_MS);
-
         for (WorkflowRun run : job.getBuilds()) {
             if (!run.isBuilding() && run.getStartTimeInMillis() < cutoff) break;
             records.add(new BuildRecord(
@@ -461,100 +502,222 @@ public class OverviewDataService {
                     run.isBuilding()));
             if (records.size() >= MAX_BUILDS_PER_PIPELINE) break;
         }
-
         BUILD_CACHE.put(cacheKey, new CachedBuilds(records));
         return records;
     }
 
-    private List<StageRecord> fetchStageRecords(WorkflowJob job, int buildNumber) {
-        try {
-            WorkflowRun run = job.getBuildByNumber(buildNumber);
-            if (run == null) return null;
-
-            RunExt runExt = RunExt.create(run);
-            List<StageRecord> stages = new ArrayList<>();
-            for (StageNodeExt node : runExt.getStages()) {
-                stages.add(new StageRecord(
-                        node.getName(),
-                        node.getStatus() != null ? node.getStatus().name() : "UNKNOWN",
-                        node.getDurationMillis()));
-            }
-            return stages;
-        } catch (Exception e) {
-            LOGGER.log(Level.WARNING,
-                    "Failed to read stages for " + job.getFullName() + " #" + buildNumber, e);
-            return null;
-        }
-    }
-
     /* ===================================================== */
-    /*  Trend computation                                    */
+    /*  Per-pipeline derived fields                          */
     /* ===================================================== */
 
-    /**
-     * Compares the average success rate of the most recent 3 days to
-     * the preceding 4 days.  &gt;10 pp improvement → IMPROVING, etc.
-     */
-    private String computeTrend(double[] dailySuccessRate) {
-        if (dailySuccessRate.length < 7) return "STABLE";
-
-        double recent = 0, older = 0;
-        int recentCount = 0, olderCount = 0;
-
-        for (int i = dailySuccessRate.length - 3; i < dailySuccessRate.length; i++) {
-            recent += dailySuccessRate[i];
-            recentCount++;
-        }
-        for (int i = dailySuccessRate.length - 7; i < dailySuccessRate.length - 3; i++) {
-            older += dailySuccessRate[i];
-            olderCount++;
-        }
-
-        if (recentCount == 0 || olderCount == 0) return "STABLE";
-        double diff = (recent / recentCount) - (older / olderCount);
-        if (diff > 10) return "IMPROVING";
-        if (diff < -10) return "DEGRADING";
-        return "STABLE";
-    }
-
-    /**
-     * Compares average build duration of last 3 completed builds to
-     * the 3 before that.  &gt;20% change → trend.
-     */
-    private String computeDurationTrend(List<BuildRecord> records, long now) {
-        List<Long> durations = new ArrayList<>();
+    private JSONArray extractSuccessDurations(List<BuildRecord> records) {
+        // Records are newest-first. Take last N successful runs, oldest→newest.
+        List<Integer> seconds = new ArrayList<>();
         for (BuildRecord r : records) {
-            if (!r.building && r.durationMs > 1000) {
-                durations.add(r.durationMs);
-                if (durations.size() >= 6) break;
+            if (r.building) continue;
+            if (!"SUCCESS".equals(r.result)) continue;
+            if (r.durationMs <= 1000) continue;
+            seconds.add((int) (r.durationMs / 1000));
+            if (seconds.size() >= EXEC_TIMES_LEN) break;
+        }
+        Collections.reverse(seconds);
+        JSONArray arr = new JSONArray();
+        arr.addAll(seconds);
+        return arr;
+    }
+
+    private JSONArray extractHistoryDots(List<BuildRecord> records) {
+        // Last HISTORY_DOTS_LEN runs, oldest→newest. Map status → ok/fail/unstable/building.
+        List<String> dots = new ArrayList<>();
+        for (BuildRecord r : records) {
+            if (dots.size() >= HISTORY_DOTS_LEN) break;
+            String s;
+            if (r.building) s = "building";
+            else if ("SUCCESS".equals(r.result)) s = "ok";
+            else if ("FAILURE".equals(r.result)) s = "fail";
+            else if ("UNSTABLE".equals(r.result)) s = "unstable";
+            else s = "skipped";
+            dots.add(s);
+        }
+        Collections.reverse(dots);
+        JSONArray arr = new JSONArray();
+        arr.addAll(dots);
+        return arr;
+    }
+
+    /* ===================================================== */
+    /*  JSON shaping for groups + broken                     */
+    /* ===================================================== */
+
+    private JSONObject pipelineToJSON(PipelineSnapshot p) {
+        JSONObject o = new JSONObject();
+        o.put("jobName", p.jobName);
+        o.put("displayName", p.displayName);
+        o.put("buildNumber", p.lastBuildNumber);
+        o.put("buildUrl", p.lastBuildUrl);
+        o.put("stages", p.stagesTopology != null ? p.stagesTopology : new JSONArray());
+        o.put("execTimes", p.successDurationsSec != null ? p.successDurationsSec : new JSONArray());
+        return o;
+    }
+
+    private JSONObject brokenToJSON(PipelineSnapshot p, long now) {
+        JSONObject o = new JSONObject();
+        o.put("jobName", p.jobName);
+        o.put("displayName", p.displayName);
+        o.put("groupName", p.groupName);
+        long sinceGreen = (p.lastGreenTimeMs > 0) ? (now - p.lastGreenTimeMs) : (now - p.brokeAtMs);
+        o.put("sinceGreenMs", sinceGreen);
+        o.put("consecutiveFailures", p.consecutiveFailures);
+        o.put("lastGreenBuildNumber", p.lastGreenBuildNumber);
+        o.put("buildNumber", p.lastBuildNumber);
+        o.put("buildUrl", p.lastBuildUrl);
+        if (p.failedStage != null) o.put("failedStage", p.failedStage);
+        o.put("history", p.historyDots != null ? p.historyDots : new JSONArray());
+        return o;
+    }
+
+    /* ===================================================== */
+    /*  Queue history sampler                                */
+    /* ===================================================== */
+
+    private void sampleQueueHistory(int currentDepth) {
+        synchronized (QUEUE_HISTORY) {
+            QUEUE_HISTORY.addLast(currentDepth);
+            while (QUEUE_HISTORY.size() > QUEUE_HISTORY_LEN) QUEUE_HISTORY.pollFirst();
+        }
+    }
+
+    /* ===================================================== */
+    /*  Agents                                                */
+    /* ===================================================== */
+
+    private JSONObject listAgents(Jenkins jenkins) {
+        JSONObject result = new JSONObject();
+        JSONArray permanent = new JSONArray();
+        JSONArray clouds = new JSONArray();
+
+        // Permanent agents (non-cloud, non-master)
+        for (Computer c : jenkins.getComputers()) {
+            String name = c.getName();
+            if (name == null || name.isEmpty()) continue; // built-in/master
+            // Skip cloud-provisioned slaves
+            try {
+                if (c instanceof hudson.slaves.AbstractCloudComputer) continue;
+            } catch (NoClassDefFoundError ignored) {}
+
+            JSONObject ag = new JSONObject();
+            ag.put("name", name);
+            String status;
+            if (c.isOffline()) status = "down";
+            else if (c.countBusy() >= c.getNumExecutors()) status = "partial";
+            else status = "ok";
+            ag.put("status", status);
+            ag.put("executorsBusy", c.countBusy());
+            ag.put("executorsTotal", c.getNumExecutors());
+            permanent.add(ag);
+        }
+
+        // Clouds
+        for (Cloud cloud : jenkins.clouds) {
+            JSONObject cl = new JSONObject();
+            cl.put("name", cloud.name);
+            int hot = 0;
+            int max = 0;
+            try {
+                java.lang.reflect.Method m = cloud.getClass().getMethod("getMaxSize");
+                Object v = m.invoke(cloud);
+                if (v instanceof Number) max = ((Number) v).intValue();
+            } catch (Exception ignored) {}
+            // Count online cloud agents whose computer name matches the cloud name
+            for (Computer c : jenkins.getComputers()) {
+                if (c.getName() == null || c.getName().isEmpty()) continue;
+                try {
+                    if (!(c instanceof hudson.slaves.AbstractCloudComputer)) continue;
+                } catch (NoClassDefFoundError e) { continue; }
+                if (!c.isOnline()) continue;
+                if (c.getName().contains(cloud.name) || c.getName().startsWith(cloud.name)) hot++;
+            }
+            cl.put("hot", hot);
+            cl.put("max", max);
+            clouds.add(cl);
+        }
+
+        result.put("permanent", permanent);
+        result.put("clouds", clouds);
+        return result;
+    }
+
+    private int countHealthyAgents(JSONObject agents) {
+        int healthy = 0;
+        JSONArray perm = agents.optJSONArray("permanent");
+        if (perm != null) {
+            for (int i = 0; i < perm.size(); i++) {
+                JSONObject a = perm.getJSONObject(i);
+                if ("ok".equals(a.optString("status")) || "partial".equals(a.optString("status"))) healthy++;
             }
         }
-        if (durations.size() < 6) return "STABLE";
+        return healthy;
+    }
 
-        double recent = (durations.get(0) + durations.get(1) + durations.get(2)) / 3.0;
-        double older = (durations.get(3) + durations.get(4) + durations.get(5)) / 3.0;
-        if (older == 0) return "STABLE";
+    private int countTotalAgents(JSONObject agents) {
+        JSONArray perm = agents.optJSONArray("permanent");
+        return perm != null ? perm.size() : 0;
+    }
 
-        double change = (recent - older) / older;
-        if (change > 0.20) return "DEGRADING";  // builds getting slower
-        if (change < -0.20) return "IMPROVING"; // builds getting faster
-        return "STABLE";
+    /* ===================================================== */
+    /*  Lockable resources (via reflection — optional dep)   */
+    /* ===================================================== */
+
+    private JSONArray listLocks(long now) {
+        JSONArray arr = new JSONArray();
+        try {
+            Class<?> mgrCls = Class.forName("org.jenkins.plugins.lockableresources.LockableResourcesManager");
+            Object mgr = mgrCls.getMethod("get").invoke(null);
+            Object resourcesObj = mgrCls.getMethod("getResources").invoke(mgr);
+            if (!(resourcesObj instanceof List)) return arr;
+            List<?> resources = (List<?>) resourcesObj;
+
+            for (Object r : resources) {
+                JSONObject l = new JSONObject();
+                String name = (String) r.getClass().getMethod("getName").invoke(r);
+                boolean locked;
+                try {
+                    locked = (Boolean) r.getClass().getMethod("isLocked").invoke(r);
+                } catch (NoSuchMethodException nsme) {
+                    Object holder = r.getClass().getMethod("getBuild").invoke(r);
+                    locked = (holder != null);
+                }
+                l.put("name", name);
+                if (locked) {
+                    long holdMs = 0;
+                    try {
+                        Object build = r.getClass().getMethod("getBuild").invoke(r);
+                        if (build != null) {
+                            long startTime = (Long) build.getClass().getMethod("getStartTimeInMillis").invoke(build);
+                            holdMs = now - startTime;
+                        }
+                    } catch (Exception ignored) {}
+                    l.put("status", "held");
+                    l.put("holdMs", holdMs);
+                    l.put("stale", holdMs > LOCK_WARN_MS);
+                } else {
+                    l.put("status", "free");
+                    l.put("holdMs", 0L);
+                    l.put("stale", false);
+                }
+                arr.add(l);
+            }
+        } catch (ClassNotFoundException e) {
+            // lockable-resources plugin not installed — return empty
+        } catch (Exception e) {
+            LOGGER.log(Level.WARNING, "Failed to read lockable resources via reflection", e);
+        }
+        return arr;
     }
 
     /* ===================================================== */
     /*  Helpers                                              */
     /* ===================================================== */
-
-    private static PipelineHealth placeholderHealth(
-            String jobName, String displayName, String groupName, String status) {
-        return new PipelineHealth(
-                jobName, displayName, groupName,
-                status, 0, "", 0,
-                0, 0, 0, 0, 0,
-                "STABLE", "STABLE",
-                new int[SPARKLINE_DAYS], new double[SPARKLINE_DAYS],
-                false);
-    }
 
     private static String buildAbsoluteUrl(WorkflowJob job, int buildNumber) {
         if (buildNumber <= 0) return "#";
@@ -569,35 +732,51 @@ public class OverviewDataService {
         return "/" + relUrl;
     }
 
-    private static long startOfDay(long ms) {
-        Calendar cal = Calendar.getInstance();
-        cal.setTimeInMillis(ms);
-        cal.set(Calendar.HOUR_OF_DAY, 0);
-        cal.set(Calendar.MINUTE, 0);
-        cal.set(Calendar.SECOND, 0);
-        cal.set(Calendar.MILLISECOND, 0);
-        return cal.getTimeInMillis();
+    private static double round1(double v) {
+        return Math.round(v * 10.0) / 10.0;
     }
 
     private void evictStaleCache() {
         long cutoff = System.currentTimeMillis() - 300_000;
         BUILD_CACHE.entrySet().removeIf(e -> e.getValue().timestamp < cutoff);
-        /* stage cache entries for completed builds rarely change, keep longer */
-        if (STAGE_CACHE.size() > 500) {
-            /* simple eviction: clear half */
-            Iterator<String> it = STAGE_CACHE.keySet().iterator();
+        if (STAGE_TOPO_CACHE.size() > 500) {
+            int target = STAGE_TOPO_CACHE.size() / 2;
             int removed = 0;
-            while (it.hasNext() && removed < STAGE_CACHE.size() / 2) {
-                it.next();
-                it.remove();
+            for (String k : new ArrayList<>(STAGE_TOPO_CACHE.keySet())) {
+                if (removed >= target) break;
+                STAGE_TOPO_CACHE.remove(k);
                 removed++;
             }
         }
     }
 
     /* ===================================================== */
-    /*  Internal data classes                                 */
+    /*  Internal data classes                                */
     /* ===================================================== */
+
+    private static class PipelineSnapshot {
+        String jobName;
+        String displayName;
+        String groupName;
+        List<BuildRecord> records = Collections.emptyList();
+        int lastBuildNumber;
+        String lastBuildUrl = "#";
+        long lastBuildTimeMs;
+        String lastResult;
+        boolean building;
+        JSONArray stagesTopology;
+        JSONArray successDurationsSec;
+        JSONArray historyDots;
+        int totalBuilds7d;
+        int unstableCount7d;
+        // Failure / regression context
+        int consecutiveFailures;
+        long brokeAtMs;
+        int lastGreenBuildNumber;
+        long lastGreenTimeMs;
+        JSONObject failedStage;
+        String failedStageName;
+    }
 
     private static class BuildRecord {
         final int number;
@@ -605,7 +784,6 @@ public class OverviewDataService {
         final long durationMs;
         final long startTimeMs;
         final boolean building;
-
         BuildRecord(int number, String result, long durationMs, long startTimeMs, boolean building) {
             this.number = number;
             this.result = result;
@@ -615,55 +793,15 @@ public class OverviewDataService {
         }
     }
 
-    private static class StageRecord {
-        final String name;
-        final String status;
-        final long durationMs;
-
-        StageRecord(String name, String status, long durationMs) {
-            this.name = name;
-            this.status = status;
-            this.durationMs = durationMs;
-        }
-    }
-
     private static class CachedBuilds {
         final List<BuildRecord> records;
         final long timestamp;
-
         CachedBuilds(List<BuildRecord> records) {
             this.records = records;
             this.timestamp = System.currentTimeMillis();
         }
-
         boolean isExpired() {
             return System.currentTimeMillis() - timestamp > BUILD_CACHE_TTL_MS;
-        }
-    }
-
-    private static class StageDurationAccumulator {
-        final String jobName;
-        final String displayName;
-        final String stageName;
-        long totalMs = 0;
-        long maxMs = 0;
-        int count = 0;
-
-        StageDurationAccumulator(String jobName, String displayName, String stageName) {
-            this.jobName = jobName;
-            this.displayName = displayName;
-            this.stageName = stageName;
-        }
-
-        void add(long durationMs) {
-            totalMs += durationMs;
-            if (durationMs > maxMs) maxMs = durationMs;
-            count++;
-        }
-
-        StagePerformance toStagePerformance() {
-            long avg = count > 0 ? totalMs / count : 0;
-            return new StagePerformance(jobName, displayName, stageName, avg, maxMs, count);
         }
     }
 }

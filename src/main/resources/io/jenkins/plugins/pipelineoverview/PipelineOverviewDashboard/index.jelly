@@ -1,10 +1,22 @@
 <?jelly escape-by-default='true'?>
 <j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:l="/lib/layout">
 
-    <l:layout title="${it.dashboardTitle}" norefresh="true">
-        <st:include page="sidepanel.jelly" it="${it}" optional="true" />
+    <!-- Use full-screen layout in kiosk mode (no header/sidebar/footer) -->
+    <j:set var="layoutType" value="two-column"/>
+    <j:if test="${request.getParameter('kiosk') != null}">
+        <j:set var="layoutType" value="full-screen"/>
+    </j:if>
+
+    <l:layout type="${layoutType}" title="${it.dashboardTitle}" norefresh="true">
+        <j:if test="${layoutType == 'two-column'}">
+            <st:include page="sidepanel.jelly" it="${it}" optional="true" />
+        </j:if>
 
         <l:main-panel>
+            <link rel="preconnect" href="https://fonts.googleapis.com" />
+            <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;display=swap" />
             <link rel="stylesheet"
                   href="${rootURL}/plugin/pipeline-overview-dashboard/css/overview-dashboard.css"
                   type="text/css" />
@@ -13,7 +25,8 @@
                  data-view-url="${rootURL}/${it.url}"
                  data-root-url="${rootURL}"
                  data-refresh-interval="${it.refreshIntervalSeconds}"
-                 data-dashboard-title="${it.dashboardTitle}">
+                 data-dashboard-title="${it.dashboardTitle}"
+                 data-header-message="${it.headerMessage}">
                 <div class="od-loading">
                     <div class="od-loading-spinner"></div>
                     <p>Loading dashboard data&#8230;</p>
