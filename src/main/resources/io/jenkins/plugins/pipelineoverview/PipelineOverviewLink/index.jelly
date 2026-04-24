@@ -1,0 +1,33 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:l="/lib/layout">
+
+    <l:layout type="full-screen" title="${it.view.dashboardTitle}" norefresh="true">
+        <l:main-panel>
+            <link rel="preconnect" href="https://fonts.googleapis.com" />
+            <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+            <link rel="stylesheet"
+                  href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;display=swap" />
+            <link rel="stylesheet"
+                  href="${rootURL}/plugin/pipeline-overview-dashboard/css/overview-dashboard.css"
+                  type="text/css" />
+
+            <div id="overview-dashboard"
+                 data-view-url="${rootURL}/pipeline-overview/"
+                 data-root-url="${rootURL}"
+                 data-refresh-interval="${it.view.refreshIntervalSeconds}"
+                 data-dashboard-title="${it.view.dashboardTitle}"
+                 data-header-message="${it.view.headerMessage}"
+                 data-fullscreen="true">
+                <div class="od-loading">
+                    <div class="od-loading-spinner"></div>
+                    <p>Loading dashboard data&#8230;</p>
+                </div>
+            </div>
+
+            <script type="text/javascript"
+                    src="${rootURL}/plugin/pipeline-overview-dashboard/js/overview-dashboard.js">
+            </script>
+        </l:main-panel>
+    </l:layout>
+
+</j:jelly>

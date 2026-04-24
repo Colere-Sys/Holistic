@@ -9,12 +9,14 @@
   const root = document.getElementById('overview-dashboard');
   if (!root) return;
 
-  const dataUrl  = root.dataset.viewUrl + 'data';
-  const refresh  = parseInt(root.dataset.refreshInterval, 10) * 1000 || 30000;
-  const title    = root.dataset.dashboardTitle || 'PIPELINE OVERVIEW';
-  const kiosk    = new URLSearchParams(window.location.search).has('kiosk');
+  const dataUrl    = root.dataset.viewUrl + 'data';
+  const refresh    = parseInt(root.dataset.refreshInterval, 10) * 1000 || 30000;
+  const title      = root.dataset.dashboardTitle || 'PIPELINE OVERVIEW';
+  const kiosk      = new URLSearchParams(window.location.search).has('kiosk');
+  const fullscreen = root.dataset.fullscreen === 'true';
+  const rootUrl    = root.dataset.rootUrl || '/';
 
-  if (kiosk) document.body.classList.add('od-kiosk');
+  if (kiosk || fullscreen) document.body.classList.add('od-kiosk');
 
   let lastData = null;
   let timer    = null;
@@ -128,14 +130,17 @@
   function renderCommandStrip(data) {
     const s = data.summary || {};
     const downCount = s.downCount || 0;
-    const pulseCls  = downCount === 0 ? ' ok' : '';
+    const unstableCount = s.unstableCount || 0;
+    const allHealthy = downCount === 0 && unstableCount === 0;
+    const pulseCls = allHealthy ? ' ok' : (downCount > 0 ? '' : ' warn');
 
     const vitals = [
-      { kind: downCount === 0 ? 'success' : 'danger',
+      { kind: allHealthy ? 'success' : 'danger',
         value: (s.weekSuccessRate != null ? Math.round(s.weekSuccessRate) : '—'),
         unit:  (s.weekSuccessRate != null ? '%' : ''),
         label: 'Week Success' },
       { kind: 'danger',  value: downCount,                          label: 'Down' },
+      { kind: 'warn',    value: unstableCount,                      label: 'Unstable' },
       { kind: 'warn',    value: s.outbreakCount || 0,               label: 'Stage Outbreaks' },
       { kind: 'info',    value: s.queueSize || 0,
         unit: (s.avgQueueWaitMs ? ' ~ ' + fmtMsToDuration(s.avgQueueWaitMs) : ''),
@@ -154,8 +159,16 @@
         '</div>';
     }).join('');
 
+    const backHtml = fullscreen
+      ? '<a class="cmd-back" href="' + escapeHtml(rootUrl) + '" title="Back to Jenkins">'
+        + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">'
+        + '<line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>'
+        + '</svg><span>Jenkins</span></a>'
+      : '';
+
     return el('header', { class: 'cmd-strip', html:
       '<div class="cmd-title">' +
+        backHtml +
         '<div class="cmd-pulse' + pulseCls + '"></div>' +
         '<div class="cmd-title-text">' + escapeHtml(title.toUpperCase()) + '</div>' +
       '</div>' +
@@ -247,22 +260,22 @@
 
   function renderBroken(data) {
     const items = data.broken || [];
-    const sorted = items.slice().sort((a, b) => (b.sinceGreenMs || 0) - (a.sinceGreenMs || 0));
-    const top = sorted.slice(0, 3);
+    const failures = items.filter(b => b.severity === 'failure')
+                          .sort((a, b) => (b.sinceGreenMs || 0) - (a.sinceGreenMs || 0));
 
     const sec = el('section', { class: 'broken-section' });
     sec.appendChild(el('header', { class: 'section-header', html:
       '<span class="section-title">Currently Broken</span>' +
-      '<span class="section-meta">sorted by severity · biggest = worst</span>'
+      '<span class="section-meta">FAILURE only · sorted by severity · biggest = worst</span>'
     }));
 
-    if (top.length === 0) {
+    if (failures.length === 0) {
       sec.appendChild(el('div', { class: 'broken-grid empty', text: 'all green · no pipelines broken' }));
       return sec;
     }
 
     const grid = el('div', { class: 'broken-grid' });
-    top.forEach((b, i) => {
+    failures.slice(0, 3).forEach((b, i) => {
       const sev = i === 0 ? 'critical' : (i === 1 ? 'high' : 'medium');
       grid.appendChild(renderBrokenCard(b, sev));
     });
@@ -270,8 +283,59 @@
     return sec;
   }
 
+  function renderUnstableSection(data) {
+    const items = data.broken || [];
+    const unstable = items.filter(b => b.severity === 'unstable')
+                          .sort((a, b) => (b.sinceGreenMs || 0) - (a.sinceGreenMs || 0));
+
+    const sec = el('section', { class: 'unstable-section' + (unstable.length === 0 ? ' empty' : '') });
+    sec.appendChild(el('header', { class: 'section-header', html:
+      '<span class="section-title">Currently Unstable</span>' +
+      '<span class="section-meta">tests failed but build completed · ' +
+        unstable.length + ' pipeline' + (unstable.length === 1 ? '' : 's') + '</span>'
+    }));
+
+    const strip = el('div', { class: 'unstable-strip' });
+    if (unstable.length === 0) {
+      strip.appendChild(el('span', { text: 'no pipelines currently unstable' }));
+    } else {
+      unstable.forEach(u => strip.appendChild(renderUnstableCompactCard(u)));
+    }
+    sec.appendChild(strip);
+    return sec;
+  }
+
+  function renderUnstableCompactCard(u) {
+    const card = el('div', { class: 'unstable-compact-card' });
+    const nameLink = u.buildUrl
+      ? '<a href="' + escapeHtml(u.buildUrl) + '">' + escapeHtml(u.displayName) + '</a>'
+      : escapeHtml(u.displayName);
+
+    let stageInfo = '';
+    if (u.failedStage && u.failedStage.name) {
+      stageInfo = '<span class="ucc-stage">at ' + escapeHtml(u.failedStage.name) + '</span>';
+    }
+    let streak = '';
+    if (u.consecutiveFailures > 0) {
+      streak = '<span class="ucc-streak">' + u.consecutiveFailures + '×</span>';
+    }
+
+    card.innerHTML =
+      '<div class="ucc-row1">' +
+        '<span class="ucc-tag">UNSTABLE</span>' +
+        '<span class="ucc-name">' + nameLink + '</span>' +
+        streak +
+      '</div>' +
+      '<div class="ucc-row2">' +
+        '<span class="ucc-time">' + escapeHtml(fmtMsToDuration(u.sinceGreenMs)) + ' since green</span>' +
+        stageInfo +
+      '</div>';
+    return card;
+  }
+
   function renderBrokenCard(b, severity) {
-    const card = el('div', { class: 'broken-card severity-' + severity });
+    const themeCls = (b.severity === 'unstable') ? ' theme-unstable' : ' theme-failure';
+    const card = el('div', { class: 'broken-card severity-' + severity + themeCls });
 
     const nameLink = b.buildUrl
       ? '<a href="' + escapeHtml(b.buildUrl) + '">' + escapeHtml(b.displayName) + '</a>'
@@ -302,8 +366,9 @@
 
     const metaParts = [];
     if (b.consecutiveFailures > 0) {
+      const word = b.severity === 'unstable' ? 'unstable' : 'failure';
       metaParts.push('<span class="broken-streak">' + b.consecutiveFailures + '× ' +
-        (b.consecutiveFailures === 1 ? 'failure' : 'in a row') + '</span>');
+        (b.consecutiveFailures === 1 ? word : 'in a row') + '</span>');
     }
     if (b.lastGreenBuildNumber) {
       metaParts.push('<span class="broken-meta-text">last green: build #' + b.lastGreenBuildNumber + '</span>');
@@ -404,32 +469,191 @@
     const nameLink = p.buildUrl
       ? '<a href="' + escapeHtml(p.buildUrl) + '">' + escapeHtml(p.displayName || p.jobName) + '</a>'
       : escapeHtml(p.displayName || p.jobName);
-    row.appendChild(el('div', { class: 'pipeline-name', html: nameLink }));
+
+    let dotCls = 'ok';
+    let dotTitle = 'Last build: SUCCESS';
+    const br = (p.buildResult || '').toUpperCase();
+    if (br === 'FAILURE')   { dotCls = 'fail';     dotTitle = 'Last build: FAILURE'; }
+    else if (br === 'UNSTABLE') { dotCls = 'unstable'; dotTitle = 'Last build: UNSTABLE (test failures)'; }
+    else if (br === 'BUILDING') { dotCls = 'building'; dotTitle = 'Last build: BUILDING'; }
+    else if (br === 'ABORTED')  { dotCls = 'skipped';  dotTitle = 'Last build: ABORTED'; }
+
+    const failPct = (p.totalBuilds7d > 0)
+        ? Math.round(((p.failureCount7d || 0) + (p.unstableCount7d || 0)) * 100 / p.totalBuilds7d)
+        : 0;
+    let metaBadge = '';
+    if (p.totalBuilds7d >= 3 && failPct >= 40) {
+      metaBadge = '<span class="row-flaky" title="' + (p.failureCount7d + p.unstableCount7d) + ' of ' + p.totalBuilds7d + ' recent builds failed">' + failPct + '%</span>';
+    }
+
+    row.appendChild(el('div', { class: 'pipeline-name', html:
+      '<span class="row-build-dot ' + dotCls + '" title="' + escapeHtml(dotTitle) + '"></span>' +
+      nameLink +
+      metaBadge
+    }));
     row.appendChild(buildStageDiagram(p.stages || []));
     row.appendChild(buildExecGraph(p.execTimes || []));
     return row;
   }
 
-  /* ─── render: stage diagram ─── */
+  /* ─── render: Jenkins-style stage graph (SVG) ─── */
 
-  function buildStageCell(stage) {
-    const status = (stage.status || 'ok').toLowerCase();
-    return el('div', { class: 'stage-cell ' + status, text: stage.name || '?', title: (stage.name || '') + ' · ' + status });
+  function shortStageName(name) {
+    if (!name) return '';
+    return String(name)
+      .replace(/^Declarative:\s+/i, '')
+      .replace(/^Stage:\s+/i, '');
+  }
+  function shortBranchName(name) {
+    if (!name) return '';
+    return String(name).replace(/^Deploy to\s+/i, '');
+  }
+  function truncateStr(s, n) {
+    if (!s) return '';
+    return s.length <= n ? s : s.substring(0, n - 1) + '…';
   }
 
   function buildStageDiagram(stages) {
     const wrap = el('div', { class: 'pipeline-stages' });
-    stages.forEach((node, i) => {
-      if (i > 0) wrap.appendChild(el('span', { class: 'stage-arrow', text: '→' }));
-      if (node.type === 'parallel') {
-        const par = el('div', { class: 'stage-parallel' });
-        (node.children || []).forEach(c => par.appendChild(buildStageCell(c)));
-        wrap.appendChild(par);
-      } else {
-        wrap.appendChild(buildStageCell(node));
-      }
+    if (!stages || stages.length === 0) return wrap;
+    wrap.innerHTML = renderPipelineGraph(stages);
+    wrap.querySelectorAll('[data-tip]').forEach(node => {
+      node.addEventListener('mouseenter', e => showStageTip(node, e));
+      node.addEventListener('mousemove',  e => showStageTip(node, e));
+      node.addEventListener('mouseleave', hideStageTip);
     });
     return wrap;
+  }
+
+  function renderPipelineGraph(stages) {
+    const COL_W = 90;
+    const ROW_H = 22;
+    const CIRCLE_R = 6.5;
+    const TOP_PAD = 14;
+    const BOTTOM_PAD = 14;
+    const PADDING_X = 10;
+    const LABEL_FS = 9;
+    const LABEL_GAP = 5;
+    const MAX_LABEL_CHARS = 14;
+
+    const cols = stages.map(s => ({
+      type: s.type === 'parallel' ? 'par' : 'seq',
+      items: s.type === 'parallel' ? (s.children || []) : [s],
+    }));
+
+    const maxBranches = Math.max(1, Math.max.apply(null, cols.map(c => c.items.length || 1)));
+    const innerH = maxBranches * ROW_H;
+    const totalHeight = TOP_PAD + innerH + BOTTOM_PAD;
+    const totalWidth = PADDING_X * 2 + cols.length * COL_W;
+    const centerY = TOP_PAD + innerH / 2;
+
+    const positions = cols.map((col, i) => {
+      const cx = PADDING_X + i * COL_W + COL_W / 2;
+      const ys = [];
+      if (col.type === 'seq') {
+        ys.push(centerY);
+      } else {
+        const bn = col.items.length;
+        const startY = TOP_PAD + (maxBranches - bn) * ROW_H / 2 + ROW_H / 2;
+        for (let j = 0; j < bn; j++) ys.push(startY + j * ROW_H);
+      }
+      return { cx, ys, col };
+    });
+
+    // No min-width on the SVG — let the parent .pipeline-stages clip/scroll horizontally.
+    // The exec-time card stays anchored on the right regardless of stage count.
+    let svg = '<svg viewBox="0 0 ' + totalWidth + ' ' + totalHeight +
+      '" preserveAspectRatio="xMinYMid meet" class="pg-svg" ' +
+      'style="height:' + totalHeight + 'px; width:' + totalWidth + 'px; max-width:none">';
+
+    function drawLine(x1, y1, x2, y2, cls) {
+      if (y1 === y2) {
+        return '<path d="M ' + x1.toFixed(1) + ' ' + y1 + ' L ' + x2.toFixed(1) + ' ' + y2 + '" class="pg-line' + cls + '"/>';
+      }
+      const mx = (x1 + x2) / 2;
+      return '<path d="M ' + x1.toFixed(1) + ' ' + y1 +
+        ' C ' + mx.toFixed(1) + ' ' + y1 + ', ' + mx.toFixed(1) + ' ' + y2 +
+        ', ' + x2.toFixed(1) + ' ' + y2 + '" class="pg-line' + cls + '"/>';
+    }
+
+    // Connectors
+    for (let i = 1; i < cols.length; i++) {
+      const prev = positions[i - 1];
+      const curr = positions[i];
+      const prevAllSkipped = prev.col.items.every(s => (s.status || 'ok') === 'skipped');
+      const currAllSkipped = curr.col.items.every(s => (s.status || 'ok') === 'skipped');
+      const cls = (prevAllSkipped && currAllSkipped) ? ' skipped' : '';
+
+      if (prev.ys.length === 1 && curr.ys.length === 1) {
+        svg += drawLine(prev.cx + CIRCLE_R, prev.ys[0], curr.cx - CIRCLE_R, curr.ys[0], cls);
+      } else if (prev.ys.length === 1) {
+        curr.ys.forEach(cy => { svg += drawLine(prev.cx + CIRCLE_R, prev.ys[0], curr.cx - CIRCLE_R, cy, cls); });
+      } else if (curr.ys.length === 1) {
+        prev.ys.forEach(py => { svg += drawLine(prev.cx + CIRCLE_R, py, curr.cx - CIRCLE_R, curr.ys[0], cls); });
+      } else {
+        const n = Math.min(prev.ys.length, curr.ys.length);
+        for (let j = 0; j < n; j++) {
+          svg += drawLine(prev.cx + CIRCLE_R, prev.ys[j], curr.cx - CIRCLE_R, curr.ys[j], cls);
+        }
+      }
+    }
+
+    // Nodes + labels
+    cols.forEach((col, i) => {
+      const pos = positions[i];
+      col.items.forEach((stage, j) => {
+        const cy = pos.ys[j];
+        const status = (stage.status || 'ok').toLowerCase();
+        const fullName = stage.name || '';
+        const labelText = (col.type === 'par' ? shortBranchName(fullName) : shortStageName(fullName));
+
+        svg += '<circle cx="' + pos.cx + '" cy="' + cy + '" r="' + CIRCLE_R +
+          '" class="pg-node pg-' + status + '" data-tip="<strong>' + escapeHtml(fullName) +
+          '</strong><span class=\'tt-label\'>' + status.toUpperCase() + '</span>"/>';
+
+        const labelY = (col.type === 'seq')
+          ? cy - CIRCLE_R - LABEL_GAP
+          : cy + CIRCLE_R + LABEL_GAP + LABEL_FS - 2;
+
+        svg += '<text x="' + pos.cx + '" y="' + labelY + '" text-anchor="middle" class="pg-label ' +
+          status + '" font-size="' + LABEL_FS + '">' +
+          escapeHtml(truncateStr(labelText, MAX_LABEL_CHARS)) + '</text>';
+      });
+    });
+
+    svg += '</svg>';
+    return svg;
+  }
+
+  /* ─── shared floating tooltip for stage graph nodes ─── */
+  let _stageTipEl = null;
+  function _ensureStageTip() {
+    if (_stageTipEl) return _stageTipEl;
+    _stageTipEl = document.createElement('div');
+    _stageTipEl.style.cssText = 'position:fixed;pointer-events:none;z-index:200;'
+      + 'background:var(--od-surface-3);border:1px solid var(--od-border-strong);'
+      + 'color:var(--od-text);padding:5px 9px;border-radius:5px;'
+      + 'font-family:var(--od-mono);font-size:10.5px;font-weight:600;'
+      + 'white-space:nowrap;box-shadow:0 6px 16px rgba(0,0,0,0.6);'
+      + 'opacity:0;transition:opacity 0.1s;';
+    document.body.appendChild(_stageTipEl);
+    return _stageTipEl;
+  }
+  function showStageTip(node, e) {
+    const t = _ensureStageTip();
+    t.innerHTML = node.dataset.tip;
+    t.style.opacity = '1';
+    const rect = t.getBoundingClientRect();
+    let x = e.clientX - rect.width / 2;
+    let y = e.clientY - rect.height - 12;
+    if (x < 8) x = 8;
+    if (x + rect.width > window.innerWidth - 8) x = window.innerWidth - rect.width - 8;
+    if (y < 8) y = e.clientY + 16;
+    t.style.left = x + 'px';
+    t.style.top = y + 'px';
+  }
+  function hideStageTip() {
+    if (_stageTipEl) _stageTipEl.style.opacity = '0';
   }
 
   /* ─── render: exec time graph ─── */
@@ -451,7 +675,7 @@
       return wrap;
     }
 
-    const w = 240, h = 32, pad = 3;
+    const w = 240, h = 56, pad = 4;
     const min = Math.min.apply(null, times);
     const max = Math.max.apply(null, times);
     const range = Math.max(max - min, 1);
@@ -465,42 +689,45 @@
     const last = points[points.length - 1];
 
     const t = trendOf(times);
-    let strokeColor = 'rgba(94, 179, 255, 0.85)';
-    let fillColor   = 'rgba(94, 179, 255, 0.13)';
+    let strokeColor = 'rgba(94, 179, 255, 0.95)';
+    let fillColor   = 'rgba(94, 179, 255, 0.16)';
     let trendCls    = 'flat';
     let trendArrow  = '·';
     let trendTxt    = '';
     if (t > 0.15) {
-      strokeColor = 'rgba(255, 176, 32, 0.95)';
-      fillColor   = 'rgba(255, 176, 32, 0.13)';
+      strokeColor = 'rgba(255, 176, 32, 1)';
+      fillColor   = 'rgba(255, 176, 32, 0.16)';
       trendCls    = 'up';
       trendArrow  = '↑';
       trendTxt    = Math.round(t * 100) + '%';
     } else if (t < -0.10) {
-      strokeColor = 'rgba(34, 211, 94, 0.9)';
-      fillColor   = 'rgba(34, 211, 94, 0.13)';
+      strokeColor = 'rgba(34, 211, 94, 1)';
+      fillColor   = 'rgba(34, 211, 94, 0.16)';
       trendCls    = 'down';
       trendArrow  = '↓';
       trendTxt    = Math.abs(Math.round(t * 100)) + '%';
     }
 
     const avg = Math.round(times.reduce((a, b) => a + b, 0) / times.length);
+    const trendChip = trendTxt
+      ? '<span class="exec-trend ' + trendCls + '">' + trendArrow + ' ' + trendTxt + '</span>'
+      : '';
 
     wrap.innerHTML =
       '<div class="exec-spark">' +
         '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none">' +
           '<path d="' + areaPath + '" fill="' + fillColor + '"/>' +
-          '<path d="' + linePath + '" fill="none" stroke="' + strokeColor + '" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>' +
-          '<circle cx="' + last[0].toFixed(1) + '" cy="' + last[1].toFixed(1) + '" r="2.2" fill="' + strokeColor + '"/>' +
+          '<path d="' + linePath + '" fill="none" stroke="' + strokeColor + '" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>' +
+          '<circle cx="' + last[0].toFixed(1) + '" cy="' + last[1].toFixed(1) + '" r="2.6" fill="' + strokeColor + '"/>' +
           '<line class="hover-line" x1="0" y1="0" x2="0" y2="' + h + '" stroke="' + strokeColor + '" stroke-width="0.8" stroke-dasharray="2 2" opacity="0" pointer-events="none"/>' +
-          '<circle class="hover-dot" r="3" fill="' + strokeColor + '" opacity="0" pointer-events="none"/>' +
+          '<circle class="hover-dot" r="3.2" fill="' + strokeColor + '" opacity="0" pointer-events="none"/>' +
         '</svg>' +
         '<div class="exec-tooltip"></div>' +
       '</div>' +
       '<div class="exec-meta">' +
         '<div class="exec-value">' + escapeHtml(fmtDuration(avg)) + '</div>' +
-        '<div class="exec-sub">avg · <span class="exec-trend ' + trendCls + '">' + trendArrow +
-          (trendTxt ? ' ' + trendTxt : '') + '</span></div>' +
+        '<div class="exec-sub">avg ' + trendChip + '</div>' +
+        '<div class="exec-range">' + escapeHtml(fmtDuration(min)) + ' – ' + escapeHtml(fmtDuration(max)) + '</div>' +
       '</div>';
 
     const spark = wrap.querySelector('.exec-spark');
@@ -710,6 +937,7 @@
     dash.appendChild(renderCommandStrip(data));
     dash.appendChild(renderCrisis(data));
     dash.appendChild(renderBroken(data));
+    dash.appendChild(renderUnstableSection(data));
     dash.appendChild(renderHealth(data));
     dash.appendChild(renderCapacity(data));
     dash.appendChild(renderBottomStrip(data));
