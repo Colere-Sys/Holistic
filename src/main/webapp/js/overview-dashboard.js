@@ -1,8 +1,3 @@
-/* =====================================================================
-   Pipeline Overview Dashboard v2 — client-side rendering.
-   Fetches /data JSON from the view, renders all sections, auto-refreshes.
-   ===================================================================== */
-
 (function () {
   'use strict';
 
@@ -21,7 +16,7 @@
   let lastData = null;
   let timer    = null;
 
-  /* ─── helpers ─── */
+  /* helpers */
 
   const pad = n => String(n).padStart(2, '0');
 
@@ -97,7 +92,7 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
-  /* ─── icon library ─── */
+  /* icons */
 
   const ICONS = {
     warn: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
@@ -111,7 +106,7 @@
     return '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' + ICONS[name] + '</svg>';
   }
 
-  /* ─── live clock ─── */
+  /* clock */
 
   let clockEl, dateEl;
   function tickClock() {
@@ -125,7 +120,7 @@
     }
   }
 
-  /* ─── render: command strip ─── */
+  /* command strip */
 
   function renderCommandStrip(data) {
     const s = data.summary || {};
@@ -180,7 +175,7 @@
     });
   }
 
-  /* ─── render: crisis zone (outbreaks + regressions) ─── */
+  /* crisis zone */
 
   function renderOutbreakPanel(outbreaks) {
     const items = (outbreaks || []).filter(c => c && c.count >= 2);
@@ -256,7 +251,7 @@
     ]);
   }
 
-  /* ─── render: currently broken ─── */
+  /* currently broken */
 
   function renderBroken(data) {
     const items = data.broken || [];
@@ -388,7 +383,7 @@
     return card;
   }
 
-  /* ─── render: pipeline health (groups) ─── */
+  /* pipeline health */
 
   function renderHealth(data) {
     const sec = el('section', { class: 'health-section' });
@@ -496,7 +491,7 @@
     return row;
   }
 
-  /* ─── render: Jenkins-style stage graph (SVG) ─── */
+  /* stage graph */
 
   function shortStageName(name) {
     if (!name) return '';
@@ -560,8 +555,7 @@
       return { cx, ys, col };
     });
 
-    // No min-width on the SVG — let the parent .pipeline-stages clip/scroll horizontally.
-    // The exec-time card stays anchored on the right regardless of stage count.
+    // No min-width on SVG: let the parent clip/scroll, keeping exec-time anchored right.
     let svg = '<svg viewBox="0 0 ' + totalWidth + ' ' + totalHeight +
       '" preserveAspectRatio="xMinYMid meet" class="pg-svg" ' +
       'style="height:' + totalHeight + 'px; width:' + totalWidth + 'px; max-width:none">';
@@ -625,7 +619,7 @@
     return svg;
   }
 
-  /* ─── shared floating tooltip for stage graph nodes ─── */
+  /* stage tooltip */
   let _stageTipEl = null;
   function _ensureStageTip() {
     if (_stageTipEl) return _stageTipEl;
@@ -656,7 +650,7 @@
     if (_stageTipEl) _stageTipEl.style.opacity = '0';
   }
 
-  /* ─── render: exec time graph ─── */
+  /* exec time graph */
 
   function trendOf(times) {
     if (times.length < 6) return 0;
@@ -771,7 +765,7 @@
     return wrap;
   }
 
-  /* ─── render: capacity (queue + locks) ─── */
+  /* capacity */
 
   function renderCapacity(data) {
     return el('section', { class: 'capacity' }, [
@@ -867,7 +861,7 @@
     return 'active';
   }
 
-  /* ─── render: bottom strip (unstable + agents) ─── */
+  /* bottom strip */
 
   function renderBottomStrip(data) {
     return el('footer', { class: 'bottom-strip' }, [
@@ -928,7 +922,7 @@
     });
   }
 
-  /* ─── full render ─── */
+  /* full render */
 
   function renderAll(data) {
     lastData = data;
@@ -953,7 +947,7 @@
     root.appendChild(el('div', { class: 'od-error', text: 'Failed to load dashboard: ' + msg }));
   }
 
-  /* ─── data fetch loop ─── */
+  /* fetch loop */
 
   function fetchData() {
     const xhr = new XMLHttpRequest();
@@ -981,7 +975,7 @@
     xhr.send();
   }
 
-  /* ─── boot ─── */
+  /* boot */
 
   fetchData();
   setInterval(fetchData, refresh);

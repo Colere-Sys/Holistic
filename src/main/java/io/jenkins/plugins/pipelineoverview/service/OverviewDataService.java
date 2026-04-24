@@ -38,12 +38,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-/**
- * Builds the JSON payload consumed by the v2 dashboard frontend.
- * Computes per-pipeline latest-run topology, currently-broken cards with
- * regression context, leaf-stage outbreak clustering, queue + agents +
- * locks state, and aggregate KPIs.
- */
 public class OverviewDataService {
 
     private static final Logger LOGGER =
@@ -59,22 +53,15 @@ public class OverviewDataService {
     private static final long REGRESSION_MIN_GREEN_MS = 6 * 60 * 60 * 1000L;
     private static final long LOCK_WARN_MS = 15 * 60 * 1000L;
 
-    /* ---------- caches ---------- */
-
     private static final Map<String, CachedBuilds> BUILD_CACHE = new ConcurrentHashMap<>();
     private static final long BUILD_CACHE_TTL_MS = 15_000;
-
     private static final Map<String, JSONArray> STAGE_TOPO_CACHE = new ConcurrentHashMap<>();
-
     private static final Deque<Integer> QUEUE_HISTORY = new ArrayDeque<>(QUEUE_HISTORY_LEN);
-
-    /* ===================================================== */
 
     public JSONObject fetchDashboardData(List<DashboardGroup> groups, int historyDays) {
         long now = System.currentTimeMillis();
         Jenkins jenkins = Jenkins.get();
 
-        // 1. Collect per-pipeline data
         Map<String, PipelineSnapshot> snaps = new LinkedHashMap<>();
         Map<String, String> jobToGroup = new LinkedHashMap<>();
         for (DashboardGroup group : groups) {
@@ -90,7 +77,6 @@ public class OverviewDataService {
             }
         }
 
-        // 2. Aggregate week stats + categorize
         long sevenDaysAgo = now - WEEK_MS;
         long fourteenDaysAgo = now - 2 * WEEK_MS;
         int totalThisWeek = 0, successThisWeek = 0;
@@ -127,8 +113,6 @@ public class OverviewDataService {
         double weekRate = totalThisWeek > 0 ? (successThisWeek * 100.0 / totalThisWeek) : 100.0;
         double weekRateLast = totalLastWeek > 0 ? (successLastWeek * 100.0 / totalLastWeek) : 100.0;
 
-        // 3. Detect regressions: broken pipelines that were green for at least REGRESSION_MIN_GREEN_MS
-        //    and broke within REGRESSION_WINDOW_MS
         List<JSONObject> regressions = new ArrayList<>();
         for (PipelineSnapshot p : broken) {
             if (p.brokeAtMs == 0 || p.lastGreenTimeMs == 0) continue;
@@ -148,7 +132,6 @@ public class OverviewDataService {
         }
         regressions.sort((a, b) -> Long.compare(b.getLong("brokeAtMs"), a.getLong("brokeAtMs")));
 
-        // 4. Outbreaks: cluster broken by leaf failed stage (≥2 pipelines)
         Map<String, List<String>> stageToNames = new LinkedHashMap<>();
         for (PipelineSnapshot p : broken) {
             String stage = p.failedStageName;
@@ -168,7 +151,6 @@ public class OverviewDataService {
         }
         outbreaksList.sort((a, b) -> b.getInt("count") - a.getInt("count"));
 
-        // 5. Queue
         Queue.Item[] queueItems = Queue.getInstance().getItems();
         long avgWaitMs = 0;
         if (queueItems.length > 0) {
@@ -208,7 +190,6 @@ public class OverviewDataService {
         regArr.addAll(regressions);
         result.put("regressions", regArr);
 
-        // Broken cards (sorted by sinceGreen desc)
         List<PipelineSnapshot> brokenSorted = new ArrayList<>(broken);
         brokenSorted.sort(Comparator.comparingLong((PipelineSnapshot p) -> {
             long sinceGreen = (p.brokeAtMs > 0) ? (now - p.lastGreenTimeMs) : 0;
@@ -218,12 +199,9 @@ public class OverviewDataService {
         for (PipelineSnapshot p : brokenSorted) brokenArr.add(brokenToJSON(p, now));
         result.put("broken", brokenArr);
 
-        // Groups → pipelines (skip pipelines with no recent runs)
         int hiddenInactive = 0;
         JSONArray groupsArr = new JSONArray();
         for (DashboardGroup group : groups) {
-            JSONObject g = new JSONObject();
-            g.put("name", group.getName());
             JSONArray ps = new JSONArray();
             for (DashboardEntry entry : group.getPipelines()) {
                 if (!entry.isEnabled()) continue;
@@ -232,23 +210,23 @@ public class OverviewDataService {
                 if (p.records.isEmpty()) { hiddenInactive++; continue; }
                 ps.add(pipelineToJSON(p));
             }
+            if (ps.isEmpty()) continue;
+            JSONObject g = new JSONObject();
+            g.put("name", group.getName());
             g.put("pipelines", ps);
             groupsArr.add(g);
         }
         result.put("groups", groupsArr);
         result.put("hiddenInactive", hiddenInactive);
 
-        // Queue history sparkline
         JSONArray qh = new JSONArray();
         synchronized (QUEUE_HISTORY) {
             for (Integer v : QUEUE_HISTORY) qh.add(v);
         }
         result.put("queueHistory", qh);
 
-        // Locks
         result.put("locks", listLocks(now));
 
-        // Unstable list (sort by count desc)
         unstableList.sort((a, b) -> b.unstableCount7d - a.unstableCount7d);
         JSONArray unArr = new JSONArray();
         for (PipelineSnapshot p : unstableList) {
@@ -267,10 +245,6 @@ public class OverviewDataService {
         evictStaleCache();
         return result;
     }
-
-    /* ===================================================== */
-    /*  Per-pipeline collection                              */
-    /* ===================================================== */
 
     private PipelineSnapshot collectPipelineSnapshot(
             Jenkins jenkins, DashboardEntry entry, String groupName,
@@ -298,19 +272,15 @@ public class OverviewDataService {
         snap.building = latest.building;
         snap.lastResult = latest.building ? "BUILDING" : (latest.result != null ? latest.result : "UNKNOWN");
 
-        // Latest run topology (cached per build #)
         snap.stagesTopology = getStageTopology(job, latest.number);
 
-        // If the build was UNSTABLE / FAILURE but no individual stage carries that status
-        // (typical of post-build test publishers — junit/jacoco mark the BUILD unstable
-        // after all stages have already finished SUCCESS), propagate the result to the
-        // last non-skipped stage so the visual matches the row's build-result dot.
+        // junit/jacoco set build UNSTABLE/FAILURE without marking any stage; propagate
+        // to the last non-skipped stage so the visual matches the build-result dot.
         if ("UNSTABLE".equals(snap.lastResult) || "FAILURE".equals(snap.lastResult)) {
             String target = "FAILURE".equals(snap.lastResult) ? "fail" : "unstable";
             propagateBuildStatusToLastStage(snap.stagesTopology, target);
         }
 
-        // 7d totals + unstable + failure counts
         long sevenAgo = now - WEEK_MS;
         for (BuildRecord r : records) {
             if (r.building) continue;
@@ -321,14 +291,9 @@ public class OverviewDataService {
             }
         }
 
-        // Successful build durations (oldest → newest, last EXEC_TIMES_LEN)
         snap.successDurationsSec = extractSuccessDurations(records);
-
-        // History dots (last HISTORY_DOTS_LEN, oldest → newest)
         snap.historyDots = extractHistoryDots(records);
 
-        // If currently failing OR unstable: find regression context (last green build, streak length).
-        // UNSTABLE counts as "not green" — many users treat repeatedly-unstable as broken.
         if ("FAILURE".equals(snap.lastResult) || "UNSTABLE".equals(snap.lastResult)) {
             int consecutive = 0;
             long brokeAt = latest.startTimeMs;
@@ -358,10 +323,6 @@ public class OverviewDataService {
         return snap;
     }
 
-    /* ===================================================== */
-    /*  Stage topology — flat list with parallel detection   */
-    /* ===================================================== */
-
     private JSONArray getStageTopology(WorkflowJob job, int buildNumber) {
         if (buildNumber <= 0) return new JSONArray();
         String key = job.getFullName() + "#" + buildNumber;
@@ -375,28 +336,19 @@ public class OverviewDataService {
             FlowExecution exec = run.getExecution();
             if (exec == null) return topology;
 
-            // Walk the FlowGraph directly. pipeline-rest-api's RunExt.getStages() filters
-            // OUT inner parallel branches in declarative pipelines, which is exactly what we
-            // need to render. So we collect every stage-like node ourselves:
-            //   - BlockStartNode + LabelAction = stage (sequential or parallel branch)
-            //   - ThreadNameAction on the same node = it's a parallel branch wrapper
-            //   - ThreadNameAction on an enclosing block = stage is INSIDE a parallel branch
             DepthFirstScanner scanner = new DepthFirstScanner();
             List<FlowNode> stageNodes = new ArrayList<>();
             Set<String> stageIds = new HashSet<>();
             for (FlowNode n : scanner.allNodes(exec)) {
                 if (!(n instanceof BlockStartNode)) continue;
                 if (n.getAction(LabelAction.class) == null) continue;
+                // Drop "Branch: X" wrappers — declarative parallels emit them alongside the user stage.
                 if (n.getAction(ThreadNameAction.class) != null) continue;
                 stageNodes.add(n);
                 stageIds.add(n.getId());
             }
             stageNodes.sort(Comparator.comparingLong(this::startTimeOf));
 
-            // pipeline-rest-api's RunExt.getStages() correctly identifies UNSTABLE for the
-            // OUTER stages (it has internal logic Jenkins's own stage-view relies on).
-            // It does NOT return inner parallel branches — those we compute via FlowGraph
-            // aggregation as a fallback.
             Map<String, StatusExt> knownStatuses = new HashMap<>();
             try {
                 RunExt runExt = RunExt.create(run);
@@ -410,7 +362,6 @@ public class OverviewDataService {
                 LOGGER.log(Level.FINE, "RunExt unavailable, falling back to graph-only", t);
             }
 
-            // Aggregation fallback: walk every FlowNode, propagate worst status to enclosing stage
             Map<String, StatusExt> stageStatuses = new HashMap<>();
             for (FlowNode n : scanner.allNodes(exec)) {
                 StatusExt s;
@@ -431,14 +382,12 @@ public class OverviewDataService {
                 }
             }
 
-            // Build topology in two passes to avoid net.sf.json mutation quirks.
+            // Two-pass build — net.sf.json's getJSONArray()-then-mutate doesn't reliably persist.
             Map<String, List<JSONObject>> childrenByParent = new LinkedHashMap<>();
             Map<Integer, String> parallelSlotIds = new LinkedHashMap<>();
 
             for (FlowNode n : stageNodes) {
                 String stageName = labelOf(n);
-                // Prefer pipeline-rest-api's status (knows UNSTABLE for outer stages).
-                // Fall back to our graph aggregation for parallel branches it filtered out.
                 StatusExt agg = knownStatuses.containsKey(n.getId())
                         ? knownStatuses.get(n.getId())
                         : stageStatuses.getOrDefault(n.getId(), StatusExt.SUCCESS);
@@ -469,7 +418,6 @@ public class OverviewDataService {
                 }
             }
 
-            // Second pass: materialize JSONArrays for parallel children
             for (Map.Entry<Integer, String> e : parallelSlotIds.entrySet()) {
                 List<JSONObject> children = childrenByParent.get(e.getValue());
                 JSONArray arr = new JSONArray();
@@ -489,7 +437,6 @@ public class OverviewDataService {
 
     private void propagateBuildStatusToLastStage(JSONArray topology, String targetStatus) {
         if (topology == null || topology.isEmpty()) return;
-        // Skip if any stage is already marked as fail/unstable
         for (int i = 0; i < topology.size(); i++) {
             JSONObject n = topology.getJSONObject(i);
             if ("parallel".equals(n.optString("type"))) {
@@ -503,7 +450,6 @@ public class OverviewDataService {
                 if ("fail".equals(st) || "unstable".equals(st)) return;
             }
         }
-        // Find the last non-skipped stage and mark it
         for (int i = topology.size() - 1; i >= 0; i--) {
             JSONObject n = topology.getJSONObject(i);
             if ("parallel".equals(n.optString("type"))) {
@@ -531,7 +477,6 @@ public class OverviewDataService {
     }
 
     private String labelOf(FlowNode n) {
-        // Prefer the human label (LabelAction) over thread name; fall back to the node's display name.
         LabelAction la = n.getAction(LabelAction.class);
         if (la != null && la.getDisplayName() != null) return la.getDisplayName();
         ThreadNameAction tna = n.getAction(ThreadNameAction.class);
@@ -566,14 +511,13 @@ public class OverviewDataService {
      * ThreadNameAction; the parallel block start is the next enclosing BlockStartNode.
      */
     private String parallelParentIdOf(FlowNode n) {
-        // First check the node itself — true for parallel branch wrappers in some shapes
         if (n.getAction(ThreadNameAction.class) != null) {
             List<? extends BlockStartNode> enc = n.getEnclosingBlocks();
             if (enc != null && !enc.isEmpty()) return enc.get(0).getId();
             return "parallel:" + n.getId();
         }
-        // Then check enclosing chain — declarative `parallel { stage(...) }` puts the
-        // ThreadNameAction on the wrapper, so the inner stage finds it one level out.
+        // Declarative `parallel { stage(...) }` puts ThreadNameAction on the wrapper,
+        // so the inner stage finds it one level out.
         List<? extends BlockStartNode> enc = n.getEnclosingBlocks();
         if (enc == null) return null;
         for (int idx = 0; idx < enc.size(); idx++) {
@@ -612,10 +556,6 @@ public class OverviewDataService {
                     if ("fail".equals(c.optString("status"))) failed.add(c);
                 }
                 if (!failed.isEmpty()) {
-                    // Use the parallel block's first child name as a representative,
-                    // OR keep the parent name if available. We don't have parent name
-                    // in the topology, so use the first failed branch's name as the
-                    // stage label to cluster on. Better: take the longest common prefix.
                     JSONObject result = new JSONObject();
                     String repr = pickParallelLabel(children);
                     result.put("name", repr);
@@ -643,12 +583,10 @@ public class OverviewDataService {
         return null;
     }
 
-    /** Pick a representative label for a parallel block. Uses the longest common prefix
-     *  (Jenkins-style "Block / Branch" naming) or falls back to the first child's name. */
+    /** Longest common "X / Y" prefix across children, or the first child's name. */
     private String pickParallelLabel(JSONArray children) {
         if (children == null || children.isEmpty()) return "";
         String first = children.getJSONObject(0).getString("name");
-        // If all children have the form "X / Y" with the same X, return X.
         String prefix = first.contains(" / ") ? first.substring(0, first.indexOf(" / ")) : null;
         if (prefix != null) {
             for (int i = 1; i < children.size(); i++) {
@@ -659,10 +597,6 @@ public class OverviewDataService {
         }
         return first;
     }
-
-    /* ===================================================== */
-    /*  Build record fetching                                */
-    /* ===================================================== */
 
     private List<BuildRecord> fetchBuildRecords(WorkflowJob job, long now, int historyDays) {
         String cacheKey = job.getFullName();
@@ -686,12 +620,7 @@ public class OverviewDataService {
         return records;
     }
 
-    /* ===================================================== */
-    /*  Per-pipeline derived fields                          */
-    /* ===================================================== */
-
     private JSONArray extractSuccessDurations(List<BuildRecord> records) {
-        // Records are newest-first. Take last N successful runs, oldest→newest.
         List<Integer> seconds = new ArrayList<>();
         for (BuildRecord r : records) {
             if (r.building) continue;
@@ -707,7 +636,6 @@ public class OverviewDataService {
     }
 
     private JSONArray extractHistoryDots(List<BuildRecord> records) {
-        // Last HISTORY_DOTS_LEN runs, oldest→newest. Map status → ok/fail/unstable/building.
         List<String> dots = new ArrayList<>();
         for (BuildRecord r : records) {
             if (dots.size() >= HISTORY_DOTS_LEN) break;
@@ -724,10 +652,6 @@ public class OverviewDataService {
         arr.addAll(dots);
         return arr;
     }
-
-    /* ===================================================== */
-    /*  JSON shaping for groups + broken                     */
-    /* ===================================================== */
 
     private JSONObject pipelineToJSON(PipelineSnapshot p) {
         JSONObject o = new JSONObject();
@@ -764,10 +688,6 @@ public class OverviewDataService {
         return o;
     }
 
-    /* ===================================================== */
-    /*  Queue history sampler                                */
-    /* ===================================================== */
-
     private void sampleQueueHistory(int currentDepth) {
         synchronized (QUEUE_HISTORY) {
             QUEUE_HISTORY.addLast(currentDepth);
@@ -775,20 +695,15 @@ public class OverviewDataService {
         }
     }
 
-    /* ===================================================== */
-    /*  Agents                                                */
-    /* ===================================================== */
 
     private JSONObject listAgents(Jenkins jenkins) {
         JSONObject result = new JSONObject();
         JSONArray permanent = new JSONArray();
         JSONArray clouds = new JSONArray();
 
-        // Permanent agents (non-cloud, non-master)
         for (Computer c : jenkins.getComputers()) {
             String name = c.getName();
-            if (name == null || name.isEmpty()) continue; // built-in/master
-            // Skip cloud-provisioned slaves
+            if (name == null || name.isEmpty()) continue;
             try {
                 if (c instanceof hudson.slaves.AbstractCloudComputer) continue;
             } catch (NoClassDefFoundError ignored) {}
@@ -805,7 +720,6 @@ public class OverviewDataService {
             permanent.add(ag);
         }
 
-        // Clouds
         for (Cloud cloud : jenkins.clouds) {
             JSONObject cl = new JSONObject();
             cl.put("name", cloud.name);
@@ -816,7 +730,6 @@ public class OverviewDataService {
                 Object v = m.invoke(cloud);
                 if (v instanceof Number) max = ((Number) v).intValue();
             } catch (Exception ignored) {}
-            // Count online cloud agents whose computer name matches the cloud name
             for (Computer c : jenkins.getComputers()) {
                 if (c.getName() == null || c.getName().isEmpty()) continue;
                 try {
@@ -852,14 +765,11 @@ public class OverviewDataService {
         return perm != null ? perm.size() : 0;
     }
 
-    /* ===================================================== */
-    /*  Lockable resources (via reflection — optional dep)   */
-    /* ===================================================== */
-
+    /** Loads lockable-resources via reflection so the plugin stays optional. */
     private JSONArray listLocks(long now) {
         JSONArray arr = new JSONArray();
         try {
-            // Must load via Jenkins's uberClassLoader to see other plugins' classes.
+            // uberClassLoader so we can reach across plugin classloaders.
             ClassLoader cl = Jenkins.get().getPluginManager().uberClassLoader;
             Class<?> mgrCls = cl.loadClass("org.jenkins.plugins.lockableresources.LockableResourcesManager");
             Object mgr = mgrCls.getMethod("get").invoke(null);
@@ -919,10 +829,6 @@ public class OverviewDataService {
         return arr;
     }
 
-    /* ===================================================== */
-    /*  Helpers                                              */
-    /* ===================================================== */
-
     private static String buildAbsoluteUrl(WorkflowJob job, int buildNumber) {
         if (buildNumber <= 0) return "#";
         WorkflowRun run = job.getBuildByNumber(buildNumber);
@@ -954,10 +860,6 @@ public class OverviewDataService {
         }
     }
 
-    /* ===================================================== */
-    /*  Internal data classes                                */
-    /* ===================================================== */
-
     private static class PipelineSnapshot {
         String jobName;
         String displayName;
@@ -974,7 +876,6 @@ public class OverviewDataService {
         int totalBuilds7d;
         int unstableCount7d;
         int failureCount7d;
-        // Failure / regression context
         int consecutiveFailures;
         long brokeAtMs;
         int lastGreenBuildNumber;

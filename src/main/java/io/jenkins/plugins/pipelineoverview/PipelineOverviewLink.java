@@ -13,14 +13,7 @@ import java.io.IOException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-/**
- * Top-level Jenkins sidebar entry that opens the Pipeline Overview dashboard
- * in a full-screen layout (no Jenkins chrome), with a "back to Jenkins" button.
- *
- * <p>Configuration (pipeline groups, refresh interval, etc.) is read from the
- * first {@link PipelineOverviewDashboard} View defined on Jenkins, so the
- * existing JCasC configuration continues to work unchanged.</p>
- */
+/** Sidebar entry that opens the dashboard full-screen, reading config from the View. */
 @Extension
 public class PipelineOverviewLink implements RootAction {
 
@@ -42,12 +35,10 @@ public class PipelineOverviewLink implements RootAction {
         return "pipeline-overview";
     }
 
-    /** Used by the Jelly template to look up the dashboard's title / refresh / message. */
     public PipelineOverviewDashboard getView() {
         return findFirstDashboardView();
     }
 
-    /** REST endpoint that returns the dashboard JSON, mirroring the View's /data. */
     public void doData(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
         Jenkins.get().checkPermission(Jenkins.READ);
 

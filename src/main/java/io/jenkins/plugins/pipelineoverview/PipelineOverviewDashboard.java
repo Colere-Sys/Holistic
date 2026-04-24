@@ -25,15 +25,12 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-/**
- * A Jenkins {@link View} that renders a TV-optimised overview dashboard
- * showing pipeline health, build velocity, failure tracking, and trend
- * data across all configured pipelines.
- */
 public class PipelineOverviewDashboard extends View {
 
     private static final Logger LOGGER =
@@ -44,6 +41,10 @@ public class PipelineOverviewDashboard extends View {
     private int historyDays;
     private String headerMessage;
     private String dashboardTitle;
+    private boolean autoDiscover;
+    private List<String> autoExcludeFolders;
+    private transient List<DashboardGroup> autoCache;
+    private transient long autoCacheAt;
 
     @DataBoundConstructor
     public PipelineOverviewDashboard(String name) {
@@ -62,15 +63,24 @@ public class PipelineOverviewDashboard extends View {
         this.historyDays = 30;
         this.headerMessage = "";
         this.dashboardTitle = "";
+        this.autoDiscover = false;
+        this.autoExcludeFolders = new ArrayList<>();
     }
 
-    /* ===== getters ===== */
 
     public List<DashboardGroup> getGroups() {
+        if (autoDiscover) return discoverAllPipelines();
+        return groups != null ? groups : new ArrayList<>();
+    }
+    public List<DashboardGroup> getConfiguredGroups() {
         return groups != null ? groups : new ArrayList<>();
     }
     public int getRefreshIntervalSeconds() { return refreshIntervalSeconds; }
     public int getHistoryDays()            { return historyDays; }
+    public boolean isAutoDiscover()        { return autoDiscover; }
+    public List<String> getAutoExcludeFolders() {
+        return autoExcludeFolders != null ? autoExcludeFolders : new ArrayList<>();
+    }
     public String getHeaderMessage() {
         return headerMessage != null ? headerMessage : "";
     }
@@ -79,7 +89,6 @@ public class PipelineOverviewDashboard extends View {
                 ? dashboardTitle : getViewName();
     }
 
-    /* ===== setters ===== */
 
     @DataBoundSetter
     public void setGroups(List<DashboardGroup> groups) {
@@ -106,7 +115,80 @@ public class PipelineOverviewDashboard extends View {
         this.dashboardTitle = v;
     }
 
-    /* ===== View contract ===== */
+    @DataBoundSetter
+    public void setAutoDiscover(boolean v) {
+        this.autoDiscover = v;
+        this.autoCache = null;
+    }
+
+    @DataBoundSetter
+    public void setAutoExcludeFolders(List<String> v) {
+        this.autoExcludeFolders = v != null ? new ArrayList<>(v) : new ArrayList<>();
+        this.autoCache = null;
+    }
+
+    private static final long AUTO_CACHE_TTL_MS = 30_000;
+
+    private synchronized List<DashboardGroup> discoverAllPipelines() {
+        long now = System.currentTimeMillis();
+        if (autoCache != null && (now - autoCacheAt) < AUTO_CACHE_TTL_MS) return autoCache;
+
+        Map<String, List<DashboardEntry>> byGroup = new TreeMap<>();
+        java.util.List<String> exclude = getAutoExcludeFolders();
+
+        for (org.jenkinsci.plugins.workflow.job.WorkflowJob job :
+                Jenkins.get().getAllItems(org.jenkinsci.plugins.workflow.job.WorkflowJob.class)) {
+            if (!job.hasPermission(Item.READ)) continue;
+            String fullName = job.getFullName();
+            if (isPRBranch(fullName)) continue;
+            if (matchesAnyPrefix(fullName, exclude)) continue;
+            String g = inferGroupName(fullName);
+            byGroup.computeIfAbsent(g, k -> new ArrayList<>()).add(new DashboardEntry(fullName));
+        }
+
+        List<DashboardGroup> result = new ArrayList<>();
+        for (Map.Entry<String, List<DashboardEntry>> e : byGroup.entrySet()) {
+            DashboardGroup grp = new DashboardGroup(e.getKey());
+            grp.setPipelines(e.getValue());
+            result.add(grp);
+        }
+        autoCache = result;
+        autoCacheAt = now;
+        return result;
+    }
+
+    /** Heuristic: top-level folder name, or the first dash-segment of the leaf job name. */
+    static String inferGroupName(String fullName) {
+        String[] parts = fullName.split("/");
+        String first = parts[0];
+        // Folder containing pipelines (e.g. "sonar/X", "releases/X")
+        if (parts.length > 1 && !first.contains("-")) return first.toUpperCase();
+        // Multibranch / leaf with dash prefix
+        int dash = first.indexOf('-');
+        if (dash > 0) {
+            String prefix = first.substring(0, dash);
+            if (first.startsWith("scheduled-e2e")) return "E2E Tests";
+            return prefix.toUpperCase();
+        }
+        return "Other";
+    }
+
+    private static boolean isPRBranch(String fullName) {
+        int slash = fullName.lastIndexOf('/');
+        if (slash < 0) return false;
+        String leaf = fullName.substring(slash + 1);
+        return leaf.startsWith("PR-");
+    }
+
+    private static boolean matchesAnyPrefix(String fullName, java.util.List<String> prefixes) {
+        if (prefixes == null || prefixes.isEmpty()) return false;
+        for (String p : prefixes) {
+            if (p == null || p.isEmpty()) continue;
+            if (fullName.equals(p) || fullName.startsWith(p + "/")) return true;
+        }
+        return false;
+    }
+
 
     @Override
     public Collection<TopLevelItem> getItems() {
@@ -141,6 +223,8 @@ public class PipelineOverviewDashboard extends View {
         this.historyDays = Math.max(1, Math.min(90, json.optInt("historyDays", 30)));
         this.headerMessage = json.optString("headerMessage", "");
         this.dashboardTitle = json.optString("dashboardTitle", "");
+        this.autoDiscover = json.optBoolean("autoDiscover", false);
+        this.autoCache = null;
 
         Object groupsData = json.opt("groups");
         if (groupsData != null) {
@@ -176,7 +260,6 @@ public class PipelineOverviewDashboard extends View {
         }
     }
 
-    /* ===== REST endpoint ===== */
 
     public void doData(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
         Jenkins.get().checkPermission(Jenkins.READ);
@@ -202,7 +285,6 @@ public class PipelineOverviewDashboard extends View {
         }
     }
 
-    /* ===== Descriptor ===== */
 
     @Extension
     @Symbol("pipelineOverviewDashboard")
