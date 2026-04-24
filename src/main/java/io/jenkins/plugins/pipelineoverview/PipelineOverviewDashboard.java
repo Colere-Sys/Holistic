@@ -192,10 +192,11 @@ public class PipelineOverviewDashboard extends View {
             result.put("headerMessage", getHeaderMessage());
 
             rsp.getWriter().write(result.toString());
-        } catch (Exception e) {
-            LOGGER.log(Level.SEVERE, "Failed to build dashboard data", e);
+        } catch (Throwable t) {
+            LOGGER.log(Level.SEVERE, "Failed to build dashboard data", t);
             JSONObject error = new JSONObject();
-            error.put("error", e.getMessage());
+            String msg = t.getMessage();
+            error.put("error", (msg != null ? msg : t.getClass().getSimpleName()));
             error.put("timestamp", System.currentTimeMillis());
             rsp.getWriter().write(error.toString());
         }

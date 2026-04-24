@@ -367,7 +367,7 @@ public class OverviewDataService {
 
                 String parallelParentId = null;
                 if (node != null && node.getAction(ThreadNameAction.class) != null) {
-                    List<BlockStartNode> enclosing = node.getEnclosingBlocks();
+                    List<? extends BlockStartNode> enclosing = node.getEnclosingBlocks();
                     if (enclosing != null && !enclosing.isEmpty()) {
                         parallelParentId = enclosing.get(0).getId();
                     } else {
