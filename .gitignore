@@ -1,0 +1,9 @@
+target/
+*.hpi
+*.jar
+.idea/
+.vscode/
+*.iml
+.DS_Store
+work/
+*.log

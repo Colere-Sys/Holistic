@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Pipeline Overview · Preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../src/main/webapp/css/overview-dashboard.css">
+</head>
+<body class="od-kiosk">
+
+<div id="overview-dashboard"
+     data-view-url="/preview/"
+     data-root-url="/"
+     data-refresh-interval="30"
+     data-dashboard-title="Pipeline Overview"
+     data-fullscreen="true">
+  <div class="od-loading">
+    <div class="od-loading-spinner"></div>
+    <p>Loading dashboard data&hellip;</p>
+  </div>
+</div>
+
+<script>
+function makePipeline(name, opts) {
+  opts = opts || {};
+  return Object.assign({
+    jobName: name,
+    displayName: name,
+    buildNumber: opts.buildNumber || (100 + Math.floor(Math.random() * 200)),
+    buildUrl: '#',
+    buildResult: opts.buildResult || 'SUCCESS',
+    successRate7d: opts.successRate7d != null ? opts.successRate7d : 100,
+    totalBuilds7d: opts.totalBuilds7d || 8,
+    failureCount7d: opts.failureCount7d || 0,
+    unstableCount7d: opts.unstableCount7d || 0,
+    stages: opts.stages || DEFAULT_STAGES_OK,
+    execTimes: opts.execTimes || fakeTimes(opts.avgSec || 240, 30, opts.trend || 0)
+  }, opts.extra || {});
+}
+
+function fakeTimes(base, count, trend) {
+  let s = 0xdeadbeef;
+  const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return (s & 0xffff) / 0x10000; };
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const t = 1 + (trend || 0) * (i / Math.max(count - 1, 1));
+    const j = 1 + (rnd() - 0.5) * 0.24;
+    out.push(Math.max(5, Math.round(base * t * j)));
+  }
+  return out;
+}
+
+const DEFAULT_STAGES_OK = [
+  { type: 'seq', name: 'Checkout SCM',     status: 'ok' },
+  { type: 'seq', name: 'Lint',             status: 'ok' },
+  { type: 'seq', name: 'Build',            status: 'ok' },
+  { type: 'seq', name: 'Unit Tests',       status: 'ok' },
+  { type: 'seq', name: 'Docker Build',     status: 'ok' },
+  { type: 'seq', name: 'Security Scan',    status: 'ok' },
+  { type: 'seq', name: 'Publish Image',    status: 'ok' },
+  { type: 'parallel', children: [
+      { name: 'Deploy to Staging',  status: 'ok' },
+      { name: 'Deploy to Pre-Prod', status: 'ok' },
+      { name: 'Deploy to Prod',     status: 'ok' },
+  ]},
+  { type: 'seq', name: 'E2E Tests',        status: 'ok' },
+  { type: 'seq', name: 'Post Actions',     status: 'ok' },
+];
+
+const STAGES_FAILED_E2E = [
+  { type: 'seq', name: 'Checkout SCM',  status: 'ok' },
+  { type: 'seq', name: 'Lint',          status: 'ok' },
+  { type: 'seq', name: 'Build',         status: 'ok' },
+  { type: 'seq', name: 'Unit Tests',    status: 'ok' },
+  { type: 'seq', name: 'Docker Build',  status: 'ok' },
+  { type: 'seq', name: 'Security Scan', status: 'ok' },
+  { type: 'seq', name: 'Publish Image', status: 'ok' },
+  { type: 'parallel', children: [
+      { name: 'Deploy to Staging',  status: 'ok' },
+      { name: 'Deploy to Pre-Prod', status: 'fail' },
+      { name: 'Deploy to Prod',     status: 'skipped' },
+  ]},
+  { type: 'seq', name: 'E2E Tests',     status: 'skipped' },
+  { type: 'seq', name: 'Post Actions',  status: 'skipped' },
+];
+
+const STAGES_UNSTABLE = [
+  { type: 'seq', name: 'Checkout SCM',  status: 'ok' },
+  { type: 'seq', name: 'Lint',          status: 'ok' },
+  { type: 'seq', name: 'Build',         status: 'ok' },
+  { type: 'seq', name: 'Unit Tests',    status: 'unstable' },
+  { type: 'seq', name: 'Docker Build',  status: 'ok' },
+  { type: 'seq', name: 'Security Scan', status: 'ok' },
+  { type: 'seq', name: 'Publish Image', status: 'ok' },
+  { type: 'parallel', children: [
+      { name: 'Deploy to Staging',  status: 'ok' },
+      { name: 'Deploy to Pre-Prod', status: 'ok' },
+      { name: 'Deploy to Prod',     status: 'ok' },
+  ]},
+  { type: 'seq', name: 'E2E Tests',     status: 'ok' },
+  { type: 'seq', name: 'Post Actions',  status: 'ok' },
+];
+
+const STAGES_BUILDING = [
+  { type: 'seq', name: 'Checkout SCM',  status: 'ok' },
+  { type: 'seq', name: 'Lint',          status: 'ok' },
+  { type: 'seq', name: 'Build',         status: 'ok' },
+  { type: 'seq', name: 'Unit Tests',    status: 'ok' },
+  { type: 'seq', name: 'Docker Build',  status: 'building' },
+  { type: 'seq', name: 'Security Scan', status: 'skipped' },
+  { type: 'seq', name: 'Publish Image', status: 'skipped' },
+  { type: 'parallel', children: [
+      { name: 'Deploy to Staging',  status: 'skipped' },
+      { name: 'Deploy to Pre-Prod', status: 'skipped' },
+      { name: 'Deploy to Prod',     status: 'skipped' },
+  ]},
+  { type: 'seq', name: 'E2E Tests',     status: 'skipped' },
+  { type: 'seq', name: 'Post Actions',  status: 'skipped' },
+];
+
+const SAMPLE_DATA = {
+  timestamp: Date.now(),
+  viewName: 'Pipeline Overview',
+  summary: {
+    weekSuccessRate: 87.4,
+    weekSuccessRateLastWeek: 91.0,
+    downCount: 1,
+    unstableCount: 2,
+    buildingCount: 1,
+    outbreakCount: 1,
+    queueSize: 2,
+    avgQueueWaitMs: 92000,
+    agentsHealthy: 4,
+    agentsTotal: 4
+  },
+  outbreaks: [
+    { stageName: 'Deploy to Pre-Prod', count: 2,
+      pipelines: ['platform/billing-api', 'services/data-sync'] }
+  ],
+  regressions: [
+    {
+      jobName: 'platform/billing-api',
+      displayName: 'platform/billing-api',
+      greenDurationMs: 12 * 24 * 3600 * 1000,
+      brokeAtMs: Date.now() - 47 * 60 * 1000,
+      failedStage: 'Deploy to Pre-Prod',
+      buildNumber: 247,
+      buildUrl: '#'
+    }
+  ],
+  broken: [
+    {
+      jobName: 'platform/billing-api',
+      displayName: 'platform/billing-api',
+      groupName: 'PLATFORM',
+      severity: 'failure',
+      sinceGreenMs: 47 * 60 * 1000,
+      consecutiveFailures: 3,
+      lastGreenBuildNumber: 244,
+      buildNumber: 247,
+      buildUrl: '#',
+      failedStage: {
+        name: 'Deploy to Pre-Prod',
+        isParallel: true,
+        branches: [
+          { name: 'Deploy to Pre-Prod', status: 'FAILED' }
+        ]
+      },
+      history: ['ok','ok','ok','ok','ok','ok','ok','ok','fail','fail','fail']
+    },
+    {
+      jobName: 'services/analytics-worker',
+      displayName: 'services/analytics-worker',
+      groupName: 'SERVICES',
+      severity: 'unstable',
+      sinceGreenMs: 4 * 3600 * 1000,
+      consecutiveFailures: 2,
+      lastGreenBuildNumber: 88,
+      buildNumber: 90,
+      buildUrl: '#',
+      failedStage: { name: 'Unit Tests', isParallel: false }
+    },
+    {
+      jobName: 'services/queue-consumer',
+      displayName: 'services/queue-consumer',
+      groupName: 'SERVICES',
+      severity: 'unstable',
+      sinceGreenMs: 9 * 3600 * 1000,
+      consecutiveFailures: 4,
+      lastGreenBuildNumber: 51,
+      buildNumber: 55,
+      buildUrl: '#'
+    }
+  ],
+  groups: [
+    {
+      name: 'PLATFORM',
+      pipelines: [
+        makePipeline('platform/billing-api', {
+          buildResult: 'FAILURE', successRate7d: 33, failureCount7d: 4, totalBuilds7d: 6,
+          stages: STAGES_FAILED_E2E, avgSec: 320, trend: 0.04
+        }),
+        makePipeline('platform/auth-service', { avgSec: 180 }),
+        makePipeline('platform/notifications', { avgSec: 145 }),
+        makePipeline('platform/orchestrator', { avgSec: 410, trend: 0.18 }),
+        makePipeline('platform/web-frontend', {
+          buildResult: 'BUILDING', stages: STAGES_BUILDING, avgSec: 95
+        }),
+      ]
+    },
+    {
+      name: 'SERVICES',
+      pipelines: [
+        makePipeline('services/analytics-worker', {
+          buildResult: 'UNSTABLE', stages: STAGES_UNSTABLE, avgSec: 280,
+          successRate7d: 60, unstableCount7d: 2, totalBuilds7d: 5
+        }),
+        makePipeline('services/queue-consumer', {
+          buildResult: 'UNSTABLE', stages: STAGES_UNSTABLE, avgSec: 165,
+          successRate7d: 50, unstableCount7d: 4, failureCount7d: 1, totalBuilds7d: 8
+        }),
+        makePipeline('services/data-sync', { avgSec: 220 }),
+        makePipeline('services/report-generator', { avgSec: 95, trend: -0.12 }),
+      ]
+    },
+    {
+      name: 'E2E Tests',
+      pipelines: [
+        makePipeline('e2e/staging', {
+          stages: [
+            { type: 'seq', name: 'Checkout SCM',     status: 'ok' },
+            { type: 'seq', name: 'Provision',        status: 'ok' },
+            { type: 'seq', name: 'Deploy Services',  status: 'ok' },
+            { type: 'seq', name: 'Run E2E Tests',    status: 'ok' },
+            { type: 'seq', name: 'Tear Down',        status: 'ok' },
+          ],
+          avgSec: 1450
+        }),
+        makePipeline('e2e/production', {
+          stages: [
+            { type: 'seq', name: 'Checkout SCM',    status: 'ok' },
+            { type: 'seq', name: 'Run E2E Tests',   status: 'ok' },
+            { type: 'seq', name: 'Post Actions',    status: 'ok' },
+          ],
+          avgSec: 1100
+        }),
+        makePipeline('e2e/smoke', {
+          stages: [
+            { type: 'seq', name: 'Checkout SCM',  status: 'ok' },
+            { type: 'seq', name: 'Smoke Tests',   status: 'ok' },
+          ],
+          avgSec: 240
+        }),
+      ]
+    }
+  ],
+  hiddenInactive: 8,
+  queueHistory: [0,0,1,2,2,1,1,0,0,1,2,3,3,2,2,1,1,0,0,1,2,3,3,4,3,2,2,2,2,2],
+  locks: [
+    { name: 'production-cluster', status: 'held', holdMs: 23 * 60 * 1000, stale: true },
+    { name: 'staging-cluster',    status: 'held', holdMs: 3 * 60 * 1000,  stale: false },
+    { name: 'pre-prod-env',       status: 'free', holdMs: 0, stale: false },
+    { name: 'smoke-env',          status: 'free', holdMs: 0, stale: false },
+  ],
+  unstable: [
+    { jobName: 'services/queue-consumer', displayName: 'services/queue-consumer',
+      unstableCount: 4, totalCount: 8 },
+    { jobName: 'services/analytics-worker', displayName: 'services/analytics-worker',
+      unstableCount: 2, totalCount: 5 },
+  ],
+  agents: {
+    permanent: [
+      { name: 'build-agent-0', status: 'ok',      executorsBusy: 0, executorsTotal: 2 },
+      { name: 'build-agent-1', status: 'ok',      executorsBusy: 1, executorsTotal: 2 },
+      { name: 'build-agent-2', status: 'partial', executorsBusy: 2, executorsTotal: 2 },
+      { name: 'build-agent-3', status: 'ok',      executorsBusy: 0, executorsTotal: 2 },
+    ],
+    clouds: [
+      { name: 'k8s-fleet', hot: 2, max: 6 },
+    ]
+  }
+};
+
+window.XMLHttpRequest = function () {
+  this.open = function () {};
+  this.setRequestHeader = function () {};
+  this.send = function () {
+    this.status = 200;
+    this.responseText = JSON.stringify(SAMPLE_DATA);
+    if (typeof this.onload === 'function') this.onload();
+  };
+};
+</script>
+
+<script src="../src/main/webapp/js/overview-dashboard.js"></script>
+<script>
+  // Auto-expand the first group so the stage graph is visible in the preview.
+  var first = document.querySelector('.health-group-block');
+  if (first) first.classList.add('expanded');
+</script>
+</body>
+</html>
