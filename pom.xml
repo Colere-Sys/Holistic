@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.jenkins-ci.plugins</groupId>
+        <artifactId>plugin</artifactId>
+        <version>4.80</version>
+        <relativePath />
+    </parent>
+
+    <groupId>io.jenkins.plugins</groupId>
+    <artifactId>pipeline-overview-dashboard</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>hpi</packaging>
+
+    <name>Pipeline Overview Dashboard</name>
+    <description>
+        TV-optimised dashboard showing pipeline health, build velocity,
+        failure tracking, and trend data across all configured pipelines.
+    </description>
+
+    <properties>
+        <jenkins.version>2.492.3</jenkins.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.jenkins.tools.bom</groupId>
+                <artifactId>bom-2.492.x</artifactId>
+                <version>5473.vb_9533d9e5d88</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.ow2.asm</groupId>
+                <artifactId>asm</artifactId>
+                <version>9.8</version>
+            </dependency>
+            <dependency>
+                <groupId>org.ow2.asm</groupId>
+                <artifactId>asm-analysis</artifactId>
+                <version>9.8</version>
+            </dependency>
+            <dependency>
+                <groupId>org.ow2.asm</groupId>
+                <artifactId>asm-commons</artifactId>
+                <version>9.8</version>
+            </dependency>
+            <dependency>
+                <groupId>org.ow2.asm</groupId>
+                <artifactId>asm-tree</artifactId>
+                <version>9.8</version>
+            </dependency>
+            <dependency>
+                <groupId>org.ow2.asm</groupId>
+                <artifactId>asm-util</artifactId>
+                <version>9.8</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.jenkins-ci.plugins.workflow</groupId>
+            <artifactId>workflow-job</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.jenkins-ci.plugins.workflow</groupId>
+            <artifactId>workflow-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.jenkins-ci.plugins.pipeline-stage-view</groupId>
+            <artifactId>pipeline-rest-api</artifactId>
+            <version>2.39</version>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.servlet</groupId>
+            <artifactId>jakarta.servlet-api</artifactId>
+            <version>5.0.0</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- test -->
+        <dependency>
+            <groupId>org.jenkins-ci.main</groupId>
+            <artifactId>jenkins-test-harness</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <repositories>
+        <repository>
+            <id>repo.jenkins-ci.org</id>
+            <url>https://repo.jenkins-ci.org/public/</url>
+        </repository>
+    </repositories>
+    <pluginRepositories>
+        <pluginRepository>
+            <id>repo.jenkins-ci.org</id>
+            <url>https://repo.jenkins-ci.org/public/</url>
+        </pluginRepository>
+    </pluginRepositories>
+</project>

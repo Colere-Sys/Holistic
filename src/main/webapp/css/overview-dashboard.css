@@ -1,0 +1,501 @@
+/* ================================================================
+   Pipeline Overview Dashboard – TV-optimised dark theme
+   ================================================================ */
+
+:root {
+    --od-bg:              #0d1117;
+    --od-surface:         #161b22;
+    --od-surface-hover:   #1c2129;
+    --od-border:          #30363d;
+    --od-text:            #e6edf3;
+    --od-text-muted:      #8b949e;
+    --od-text-dim:        #484f58;
+    --od-success:         #3fb950;
+    --od-success-dim:     #238636;
+    --od-failure:         #f85149;
+    --od-failure-dim:     #da3633;
+    --od-warning:         #d29922;
+    --od-info:            #58a6ff;
+    --od-info-dim:        #1f6feb;
+    --od-purple:          #bc8cff;
+    --od-building:        #58a6ff;
+    --od-radius:          8px;
+    --od-radius-sm:       4px;
+}
+
+/* ---- reset within dashboard ---- */
+#overview-dashboard {
+    background: var(--od-bg);
+    color: var(--od-text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                 Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    min-height: 100vh;
+    padding: 16px 24px;
+    box-sizing: border-box;
+}
+#overview-dashboard *, #overview-dashboard *::before, #overview-dashboard *::after {
+    box-sizing: border-box;
+}
+#overview-dashboard a {
+    color: var(--od-info);
+    text-decoration: none;
+}
+#overview-dashboard a:hover { text-decoration: underline; }
+
+/* ---- kiosk mode: hide Jenkins chrome ---- */
+body.od-kiosk #page-header,
+body.od-kiosk #side-panel,
+body.od-kiosk #breadcrumbBar,
+body.od-kiosk .jenkins-breadcrumbs,
+body.od-kiosk #footer,
+body.od-kiosk footer,
+body.od-kiosk header { display: none !important; }
+body.od-kiosk #main-panel { margin: 0 !important; padding: 0 !important; }
+body.od-kiosk #page-body   { margin: 0 !important; padding: 0 !important; }
+body.od-kiosk { background: var(--od-bg) !important; }
+
+/* ================================================================
+   Loading
+   ================================================================ */
+
+.od-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 60vh;
+    color: var(--od-text-muted);
+    font-size: 18px;
+}
+.od-loading-spinner {
+    width: 48px; height: 48px;
+    border: 4px solid var(--od-border);
+    border-top-color: var(--od-info);
+    border-radius: 50%;
+    animation: od-spin 0.8s linear infinite;
+    margin-bottom: 16px;
+}
+@keyframes od-spin { to { transform: rotate(360deg); } }
+
+/* ================================================================
+   Header bar
+   ================================================================ */
+
+.od-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--od-border);
+    margin-bottom: 16px;
+}
+.od-header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.od-title {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+}
+.od-header-message {
+    font-size: 13px;
+    color: var(--od-text-muted);
+    background: var(--od-surface);
+    padding: 4px 10px;
+    border-radius: var(--od-radius-sm);
+}
+.od-header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 13px;
+    color: var(--od-text-muted);
+}
+.od-heartbeat {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--od-success);
+    animation: od-pulse 2s ease-in-out infinite;
+}
+@keyframes od-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.3; }
+}
+.od-kiosk-btn {
+    background: var(--od-surface);
+    border: 1px solid var(--od-border);
+    color: var(--od-text-muted);
+    padding: 4px 10px;
+    border-radius: var(--od-radius-sm);
+    cursor: pointer;
+    font-size: 12px;
+}
+.od-kiosk-btn:hover { background: var(--od-surface-hover); }
+
+/* ================================================================
+   Status banner (top colored bar)
+   ================================================================ */
+
+.od-status-banner {
+    padding: 8px 16px;
+    border-radius: var(--od-radius);
+    font-size: 15px;
+    font-weight: 600;
+    text-align: center;
+    margin-bottom: 16px;
+}
+.od-status-banner.od-status-healthy {
+    background: linear-gradient(135deg, rgba(63,185,80,0.15), rgba(63,185,80,0.05));
+    border: 1px solid var(--od-success-dim);
+    color: var(--od-success);
+}
+.od-status-banner.od-status-failing {
+    background: linear-gradient(135deg, rgba(248,81,73,0.15), rgba(248,81,73,0.05));
+    border: 1px solid var(--od-failure-dim);
+    color: var(--od-failure);
+}
+.od-status-banner.od-status-unstable {
+    background: linear-gradient(135deg, rgba(210,153,34,0.15), rgba(210,153,34,0.05));
+    border: 1px solid var(--od-warning);
+    color: var(--od-warning);
+}
+
+/* ================================================================
+   KPI cards
+   ================================================================ */
+
+.od-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.od-kpi {
+    background: var(--od-surface);
+    border: 1px solid var(--od-border);
+    border-radius: var(--od-radius);
+    padding: 14px 16px;
+    text-align: center;
+}
+.od-kpi-value {
+    font-size: 36px;
+    font-weight: 700;
+    line-height: 1.1;
+    margin-bottom: 4px;
+}
+.od-kpi-label {
+    font-size: 12px;
+    color: var(--od-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.od-kpi-success .od-kpi-value  { color: var(--od-success); }
+.od-kpi-failure .od-kpi-value  { color: var(--od-failure); }
+.od-kpi-info .od-kpi-value     { color: var(--od-info); }
+.od-kpi-warning .od-kpi-value  { color: var(--od-warning); }
+.od-kpi-neutral .od-kpi-value  { color: var(--od-text); }
+
+/* ================================================================
+   Pipeline health grid
+   ================================================================ */
+
+.od-section {
+    margin-bottom: 16px;
+}
+.od-section-title {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--od-text-muted);
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--od-border);
+}
+.od-group-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--od-text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin: 10px 0 6px;
+}
+.od-health-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.od-health-cell {
+    background: var(--od-surface);
+    border: 2px solid transparent;
+    border-radius: var(--od-radius);
+    padding: 10px 14px;
+    min-width: 150px;
+    flex: 0 0 auto;
+    position: relative;
+    transition: border-color 0.2s;
+}
+.od-health-cell:hover { border-color: var(--od-text-dim); }
+.od-health-cell-name {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 180px;
+}
+.od-health-cell-rate {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.1;
+}
+.od-health-cell-meta {
+    font-size: 11px;
+    color: var(--od-text-muted);
+    margin-top: 2px;
+}
+.od-health-cell-trend {
+    font-size: 12px;
+    position: absolute;
+    top: 10px;
+    right: 12px;
+}
+.od-health-cell-sparkline {
+    margin-top: 6px;
+}
+.od-health-cell-sparkline svg {
+    display: block;
+}
+
+/* Health cell status colors */
+.od-hc-green  { border-left: 4px solid var(--od-success); }
+.od-hc-green  .od-health-cell-rate { color: var(--od-success); }
+.od-hc-yellow { border-left: 4px solid var(--od-warning); }
+.od-hc-yellow .od-health-cell-rate { color: var(--od-warning); }
+.od-hc-red    { border-left: 4px solid var(--od-failure); }
+.od-hc-red    .od-health-cell-rate { color: var(--od-failure); }
+.od-hc-gray   { border-left: 4px solid var(--od-text-dim); }
+.od-hc-gray   .od-health-cell-rate { color: var(--od-text-dim); }
+.od-hc-building {
+    border-left: 4px solid var(--od-building);
+    animation: od-cell-pulse 2s ease-in-out infinite;
+}
+.od-hc-building .od-health-cell-rate { color: var(--od-building); }
+@keyframes od-cell-pulse {
+    0%, 100% { background: var(--od-surface); }
+    50%      { background: rgba(88,166,255,0.08); }
+}
+
+/* ================================================================
+   Bottom two-column layout
+   ================================================================ */
+
+.od-bottom {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+@media (max-width: 1100px) {
+    .od-bottom { grid-template-columns: 1fr; }
+}
+
+.od-card {
+    background: var(--od-surface);
+    border: 1px solid var(--od-border);
+    border-radius: var(--od-radius);
+    padding: 14px 16px;
+}
+
+/* ================================================================
+   Current failures
+   ================================================================ */
+
+.od-failure-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--od-border);
+}
+.od-failure-item:last-child { border-bottom: none; }
+.od-failure-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--od-failure);
+    flex-shrink: 0;
+    margin-top: 5px;
+    animation: od-pulse 1.5s ease-in-out infinite;
+}
+.od-failure-name {
+    font-weight: 600;
+    font-size: 14px;
+}
+.od-failure-detail {
+    font-size: 12px;
+    color: var(--od-text-muted);
+    margin-top: 2px;
+}
+.od-failure-badge {
+    font-size: 11px;
+    background: rgba(248,81,73,0.15);
+    color: var(--od-failure);
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-left: auto;
+    flex-shrink: 0;
+    align-self: center;
+}
+.od-all-healthy {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 24px;
+    font-size: 16px;
+    color: var(--od-success);
+    font-weight: 600;
+}
+.od-all-healthy-icon {
+    font-size: 28px;
+}
+
+/* ================================================================
+   Trends / sparklines
+   ================================================================ */
+
+.od-trend-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+}
+.od-trend-label {
+    font-size: 12px;
+    color: var(--od-text-muted);
+    min-width: 100px;
+}
+.od-trend-value {
+    font-size: 14px;
+    font-weight: 600;
+    min-width: 50px;
+    text-align: right;
+}
+.od-trend-sparkline svg {
+    display: block;
+}
+
+/* ================================================================
+   Slowest stages
+   ================================================================ */
+
+.od-stage-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--od-border);
+    gap: 10px;
+}
+.od-stage-item:last-child { border-bottom: none; }
+.od-stage-rank {
+    font-size: 12px;
+    color: var(--od-text-dim);
+    min-width: 20px;
+}
+.od-stage-info { flex: 1; }
+.od-stage-name {
+    font-size: 13px;
+    font-weight: 600;
+}
+.od-stage-job {
+    font-size: 11px;
+    color: var(--od-text-muted);
+}
+.od-stage-duration {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--od-warning);
+}
+.od-stage-bar-bg {
+    height: 4px;
+    background: var(--od-border);
+    border-radius: 2px;
+    margin-top: 4px;
+    overflow: hidden;
+}
+.od-stage-bar {
+    height: 100%;
+    background: var(--od-warning);
+    border-radius: 2px;
+    transition: width 0.5s ease;
+}
+
+/* ================================================================
+   Stale pipelines
+   ================================================================ */
+
+.od-stale-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--od-border);
+}
+.od-stale-item:last-child { border-bottom: none; }
+.od-stale-name {
+    font-size: 13px;
+    font-weight: 600;
+}
+.od-stale-ago {
+    font-size: 13px;
+    color: var(--od-text-dim);
+}
+
+/* ================================================================
+   Empty / error states
+   ================================================================ */
+
+.od-empty {
+    text-align: center;
+    padding: 24px;
+    color: var(--od-text-muted);
+    font-size: 14px;
+}
+
+.od-error {
+    text-align: center;
+    padding: 32px;
+    color: var(--od-failure);
+    font-size: 16px;
+}
+
+/* ================================================================
+   Trend arrows
+   ================================================================ */
+
+.od-trend-improving { color: var(--od-success); }
+.od-trend-degrading { color: var(--od-failure); }
+.od-trend-stable    { color: var(--od-text-dim); }
+
+/* ================================================================
+   Responsive adjustments for large TV screens
+   ================================================================ */
+
+@media (min-width: 1920px) {
+    #overview-dashboard { padding: 24px 40px; }
+    .od-title { font-size: 28px; }
+    .od-kpi-value { font-size: 44px; }
+    .od-health-cell { min-width: 180px; padding: 12px 16px; }
+    .od-health-cell-rate { font-size: 26px; }
+}
+
+@media (min-width: 2560px) {
+    #overview-dashboard { padding: 32px 60px; }
+    .od-title { font-size: 32px; }
+    .od-kpi-value { font-size: 52px; }
+}

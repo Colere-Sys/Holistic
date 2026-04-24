@@ -1,0 +1,33 @@
+<?jelly escape-by-default='true'?>
+<j:jelly xmlns:j="jelly:core" xmlns:f="/lib/form">
+
+    <f:section title="General Settings">
+        <f:entry title="Dashboard Title" field="dashboardTitle"
+                 description="Custom title shown at the top of the dashboard (defaults to view name).">
+            <f:textbox default="" />
+        </f:entry>
+
+        <f:entry title="Header Message" field="headerMessage"
+                 description="Optional banner message displayed below the title.">
+            <f:textbox default="" />
+        </f:entry>
+
+        <f:entry title="Auto-Refresh Interval (seconds)" field="refreshIntervalSeconds"
+                 description="How often the dashboard polls for new data. Minimum 5 seconds.">
+            <f:number default="30" min="5" clazz="positive-number" />
+        </f:entry>
+
+        <f:entry title="History Window (days)" field="historyDays"
+                 description="Number of days of build history to include in trends and stats (1-90).">
+            <f:number default="30" min="1" max="90" clazz="positive-number" />
+        </f:entry>
+    </f:section>
+
+    <f:section title="Pipeline Groups">
+        <f:entry>
+            <f:repeatableProperty field="groups" header="Group"
+                                  add="Add Group" minimum="0" />
+        </f:entry>
+    </f:section>
+
+</j:jelly>

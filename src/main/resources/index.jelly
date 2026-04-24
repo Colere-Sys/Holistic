@@ -1,0 +1,6 @@
+<?jelly escape-by-default='true'?>
+<div>
+    TV-optimised dashboard showing pipeline health, build velocity,
+    failure tracking, and trend data across all configured pipelines.
+    Designed for information radiators, kiosk screens, and tech-lead overviews.
+</div>
