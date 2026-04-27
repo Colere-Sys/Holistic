@@ -326,13 +326,21 @@ public class OverviewDataService {
     private JSONArray getStageTopology(WorkflowJob job, int buildNumber) {
         if (buildNumber <= 0) return new JSONArray();
         String key = job.getFullName() + "#" + buildNumber;
+
+        WorkflowRun run = job.getBuildByNumber(buildNumber);
+        if (run == null) return new JSONArray();
+        boolean stillBuilding = run.isBuilding();
+
+        // Cache is build-number keyed; trust it only for finished builds whose cached
+        // topology has no leftover "building" stages (those would be stale snapshots
+        // from a prior poll that ran while the build was still in flight).
         JSONArray cached = STAGE_TOPO_CACHE.get(key);
-        if (cached != null) return cached;
+        if (cached != null && !stillBuilding && !containsBuildingStatus(cached)) {
+            return cached;
+        }
 
         JSONArray topology = new JSONArray();
         try {
-            WorkflowRun run = job.getBuildByNumber(buildNumber);
-            if (run == null) return topology;
             FlowExecution exec = run.getExecution();
             if (exec == null) return topology;
 
@@ -431,8 +439,42 @@ public class OverviewDataService {
                     "Failed to build stage topology for " + job.getFullName() + " #" + buildNumber, t);
         }
 
-        STAGE_TOPO_CACHE.put(key, topology);
+        if (!stillBuilding) {
+            // Build is done. Any stage still flagged IN_PROGRESS was aborted/skipped — show it that way.
+            sanitizeBuildingStages(topology);
+            STAGE_TOPO_CACHE.put(key, topology);
+        }
         return topology;
+    }
+
+    private static boolean containsBuildingStatus(JSONArray topology) {
+        if (topology == null) return false;
+        for (int i = 0; i < topology.size(); i++) {
+            JSONObject node = topology.getJSONObject(i);
+            if ("building".equals(node.optString("status"))) return true;
+            JSONArray children = node.optJSONArray("children");
+            if (children != null) {
+                for (int j = 0; j < children.size(); j++) {
+                    if ("building".equals(children.getJSONObject(j).optString("status"))) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static void sanitizeBuildingStages(JSONArray topology) {
+        if (topology == null) return;
+        for (int i = 0; i < topology.size(); i++) {
+            JSONObject node = topology.getJSONObject(i);
+            if ("building".equals(node.optString("status"))) node.put("status", "skipped");
+            JSONArray children = node.optJSONArray("children");
+            if (children != null) {
+                for (int j = 0; j < children.size(); j++) {
+                    JSONObject c = children.getJSONObject(j);
+                    if ("building".equals(c.optString("status"))) c.put("status", "skipped");
+                }
+            }
+        }
     }
 
     private void propagateBuildStatusToLastStage(JSONArray topology, String targetStatus) {
