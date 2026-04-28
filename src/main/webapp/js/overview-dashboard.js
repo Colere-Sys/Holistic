@@ -275,7 +275,42 @@
       grid.appendChild(renderBrokenCard(b, sev));
     });
     sec.appendChild(grid);
+
+    if (failures.length > 3) {
+      const overflow = failures.slice(3);
+      const strip = el('div', { class: 'broken-overflow-strip' });
+      overflow.forEach(b => strip.appendChild(renderBrokenCompactCard(b)));
+      sec.appendChild(strip);
+    }
     return sec;
+  }
+
+  function renderBrokenCompactCard(b) {
+    const card = el('div', { class: 'broken-compact-card' });
+    const nameLink = b.buildUrl
+      ? '<a href="' + escapeHtml(b.buildUrl) + '">' + escapeHtml(b.displayName) + '</a>'
+      : escapeHtml(b.displayName);
+
+    let stageInfo = '';
+    if (b.failedStage && b.failedStage.name) {
+      stageInfo = '<span class="bcc-stage">at ' + escapeHtml(b.failedStage.name) + '</span>';
+    }
+    let streak = '';
+    if (b.consecutiveFailures > 0) {
+      streak = '<span class="bcc-streak">' + b.consecutiveFailures + '×</span>';
+    }
+
+    card.innerHTML =
+      '<div class="bcc-row1">' +
+        '<span class="bcc-tag">FAILURE</span>' +
+        '<span class="bcc-name">' + nameLink + '</span>' +
+        streak +
+      '</div>' +
+      '<div class="bcc-row2">' +
+        '<span class="bcc-time">' + escapeHtml(fmtMsToDuration(b.sinceGreenMs)) + ' since green</span>' +
+        stageInfo +
+      '</div>';
+    return card;
   }
 
   function renderUnstableSection(data) {
