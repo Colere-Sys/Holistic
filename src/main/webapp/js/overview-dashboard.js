@@ -986,8 +986,11 @@
 
   function fetchData() {
     const xhr = new XMLHttpRequest();
-    xhr.open('GET', dataUrl, true);
+    xhr.open('POST', dataUrl, true);
     xhr.setRequestHeader('Accept', 'application/json');
+    if (typeof crumb !== 'undefined' && crumb && crumb.fieldName) {
+      xhr.setRequestHeader(crumb.fieldName, crumb.value);
+    }
     xhr.timeout = 30000;
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {

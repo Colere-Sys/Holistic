@@ -4,6 +4,7 @@ import hudson.Extension;
 import hudson.model.AbstractDescribableImpl;
 import hudson.model.Descriptor;
 import hudson.util.FormValidation;
+import jenkins.model.Jenkins;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.DataBoundSetter;
 import org.kohsuke.stapler.QueryParameter;
@@ -55,6 +56,7 @@ public class DashboardGroup extends AbstractDescribableImpl<DashboardGroup> impl
 
         @POST
         public FormValidation doCheckName(@QueryParameter String value) {
+            Jenkins.get().checkPermission(Jenkins.READ);
             if (value == null || value.trim().isEmpty()) {
                 return FormValidation.error(Messages.DashboardGroup_NameRequired());
             }

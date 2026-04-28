@@ -8,6 +8,7 @@ import jenkins.model.Jenkins;
 import net.sf.json.JSONObject;
 import org.kohsuke.stapler.StaplerRequest2;
 import org.kohsuke.stapler.StaplerResponse2;
+import org.kohsuke.stapler.verb.POST;
 
 import java.io.IOException;
 import java.util.logging.Level;
@@ -39,6 +40,7 @@ public class PipelineOverviewLink implements RootAction {
         return findFirstDashboardView();
     }
 
+    @POST
     public void doData(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
         Jenkins.get().checkPermission(Jenkins.READ);
 

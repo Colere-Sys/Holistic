@@ -79,7 +79,9 @@ public class DashboardEntry extends AbstractDescribableImpl<DashboardEntry> impl
             return FormValidation.ok();
         }
 
+        @POST
         public AutoCompletionCandidates doAutoCompleteJobName(@QueryParameter String value) {
+            Jenkins.get().checkPermission(Jenkins.READ);
             AutoCompletionCandidates candidates = new AutoCompletionCandidates();
             if (value == null || value.length() < 2) return candidates;
             String lower = value.toLowerCase();

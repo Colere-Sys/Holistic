@@ -235,12 +235,6 @@ public class PipelineOverviewDashboard extends View {
     }
 
     @Override
-    public Item doCreateItem(StaplerRequest2 req, StaplerResponse2 rsp)
-            throws IOException, ServletException {
-        return Jenkins.get().doCreateItem(req, rsp);
-    }
-
-    @Override
     public void onJobRenamed(Item item, String oldName, String newName) {
         if (groups == null) return;
         boolean changed = false;
@@ -261,6 +255,7 @@ public class PipelineOverviewDashboard extends View {
     }
 
 
+    @POST
     public void doData(StaplerRequest2 req, StaplerResponse2 rsp) throws IOException {
         Jenkins.get().checkPermission(Jenkins.READ);
 
