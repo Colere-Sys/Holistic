@@ -8,13 +8,13 @@
     <parent>
         <groupId>org.jenkins-ci.plugins</groupId>
         <artifactId>plugin</artifactId>
-        <version>4.80</version>
+        <version>6.2153.vcf31911d10c4</version>
         <relativePath />
     </parent>
 
     <groupId>io.jenkins.plugins</groupId>
     <artifactId>holistic</artifactId>
-    <version>2.0-SNAPSHOT</version>
+    <version>${changelist}</version>
     <packaging>hpi</packaging>
 
     <name>Holistic</name>
@@ -31,14 +31,6 @@
         </license>
     </licenses>
 
-    <developers>
-        <developer>
-            <id>anashassari</id>
-            <name>Anas Hassari</name>
-            <email>anashassari@protonmail.com</email>
-        </developer>
-    </developers>
-
     <scm>
         <connection>scm:git:https://github.com/${gitHubRepo}.git</connection>
         <developerConnection>scm:git:git@github.com:${gitHubRepo}.git</developerConnection>
@@ -47,44 +39,25 @@
     </scm>
 
     <properties>
+        <changelist>999999-SNAPSHOT</changelist>
         <gitHubRepo>jenkinsci/holistic-plugin</gitHubRepo>
+        <jenkins.baseline>2.541</jenkins.baseline>
+        <jenkins.version>${jenkins.baseline}.3</jenkins.version>
+        <hpi.strictBundledArtifacts>true</hpi.strictBundledArtifacts>
+        <ban-deprecated-stapler.skip>false</ban-deprecated-stapler.skip>
+        <ban-commons-lang-2.skip>false</ban-commons-lang-2.skip>
         <scmTag>${project.artifactId}-${project.version}</scmTag>
-        <jenkins.version>2.492.3</jenkins.version>
+        <disabledTestInjection>true</disabledTestInjection>
     </properties>
 
     <dependencyManagement>
         <dependencies>
             <dependency>
                 <groupId>io.jenkins.tools.bom</groupId>
-                <artifactId>bom-2.492.x</artifactId>
-                <version>5473.vb_9533d9e5d88</version>
+                <artifactId>bom-${jenkins.baseline}.x</artifactId>
+                <version>6364.v16b_76a_4023c7</version>
                 <type>pom</type>
                 <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.ow2.asm</groupId>
-                <artifactId>asm</artifactId>
-                <version>9.8</version>
-            </dependency>
-            <dependency>
-                <groupId>org.ow2.asm</groupId>
-                <artifactId>asm-analysis</artifactId>
-                <version>9.8</version>
-            </dependency>
-            <dependency>
-                <groupId>org.ow2.asm</groupId>
-                <artifactId>asm-commons</artifactId>
-                <version>9.8</version>
-            </dependency>
-            <dependency>
-                <groupId>org.ow2.asm</groupId>
-                <artifactId>asm-tree</artifactId>
-                <version>9.8</version>
-            </dependency>
-            <dependency>
-                <groupId>org.ow2.asm</groupId>
-                <artifactId>asm-util</artifactId>
-                <version>9.8</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -101,13 +74,6 @@
         <dependency>
             <groupId>org.jenkins-ci.plugins.pipeline-stage-view</groupId>
             <artifactId>pipeline-rest-api</artifactId>
-            <version>2.39</version>
-        </dependency>
-        <dependency>
-            <groupId>jakarta.servlet</groupId>
-            <artifactId>jakarta.servlet-api</artifactId>
-            <version>5.0.0</version>
-            <scope>provided</scope>
         </dependency>
 
         <!-- test -->
