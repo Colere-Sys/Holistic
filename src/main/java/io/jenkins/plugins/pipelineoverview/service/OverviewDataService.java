@@ -599,7 +599,9 @@ public class OverviewDataService {
                 }
                 if (!failed.isEmpty()) {
                     JSONObject result = new JSONObject();
-                    String repr = pickParallelLabel(children);
+                    JSONArray failedArr = new JSONArray();
+                    failedArr.addAll(failed);
+                    String repr = pickParallelLabel(failedArr);
                     result.put("name", repr);
                     result.put("isParallel", true);
                     JSONArray branches = new JSONArray();
