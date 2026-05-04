@@ -1,26 +1,24 @@
 package io.jenkins.plugins.pipelineoverview;
 
 import hudson.model.ViewDescriptor;
-import org.junit.Rule;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
 import org.jvnet.hudson.test.JenkinsRule;
+import org.jvnet.hudson.test.junit.jupiter.WithJenkins;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Integration tests for {@link PipelineOverviewDashboard}.
- */
-public class PipelineOverviewDashboardTest {
-
-    @Rule
-    public JenkinsRule j = new JenkinsRule();
+@WithJenkins
+class PipelineOverviewDashboardTest {
 
     @Test
-    public void viewDescriptorIsRegistered() {
+    void viewDescriptorIsRegistered(JenkinsRule j) {
         ViewDescriptor descriptor = null;
         for (ViewDescriptor d : j.jenkins.getExtensionList(ViewDescriptor.class)) {
             if (d.clazz == PipelineOverviewDashboard.class) {
@@ -28,12 +26,12 @@ public class PipelineOverviewDashboardTest {
                 break;
             }
         }
-        assertNotNull("PipelineOverviewDashboard descriptor should be registered", descriptor);
+        assertNotNull(descriptor, "PipelineOverviewDashboard descriptor should be registered");
         assertEquals("Pipeline Overview Dashboard", descriptor.getDisplayName());
     }
 
     @Test
-    public void defaultConfigurationValues() {
+    void defaultConfigurationValues(JenkinsRule j) {
         PipelineOverviewDashboard view = new PipelineOverviewDashboard("test-view");
         assertEquals(30, view.getRefreshIntervalSeconds());
         assertEquals(30, view.getHistoryDays());
@@ -42,14 +40,14 @@ public class PipelineOverviewDashboardTest {
     }
 
     @Test
-    public void refreshIntervalClampedToMinimum() {
+    void refreshIntervalClampedToMinimum(JenkinsRule j) {
         PipelineOverviewDashboard view = new PipelineOverviewDashboard("test-view");
         view.setRefreshIntervalSeconds(1);
         assertEquals(5, view.getRefreshIntervalSeconds());
     }
 
     @Test
-    public void historyDaysClampedToRange() {
+    void historyDaysClampedToRange(JenkinsRule j) {
         PipelineOverviewDashboard view = new PipelineOverviewDashboard("test-view");
         view.setHistoryDays(0);
         assertEquals(1, view.getHistoryDays());
@@ -58,7 +56,7 @@ public class PipelineOverviewDashboardTest {
     }
 
     @Test
-    public void containsReturnsFalseWhenEmpty() throws Exception {
+    void containsReturnsFalseWhenEmpty(JenkinsRule j) throws Exception {
         PipelineOverviewDashboard view = new PipelineOverviewDashboard("test-view");
         j.jenkins.addView(view);
 
@@ -70,7 +68,7 @@ public class PipelineOverviewDashboardTest {
     }
 
     @Test
-    public void containsReturnsTrueForConfiguredJob() throws Exception {
+    void containsReturnsTrueForConfiguredJob(JenkinsRule j) throws Exception {
         PipelineOverviewDashboard view = new PipelineOverviewDashboard("test-view");
         j.jenkins.addView(view);
 
@@ -87,7 +85,7 @@ public class PipelineOverviewDashboardTest {
     }
 
     @Test
-    public void multipleGroupsOrdering() {
+    void multipleGroupsOrdering(JenkinsRule j) {
         PipelineOverviewDashboard view = new PipelineOverviewDashboard("test-view");
 
         DashboardGroup g1 = new DashboardGroup("Alpha");
@@ -101,7 +99,7 @@ public class PipelineOverviewDashboardTest {
     }
 
     @Test
-    public void dashboardTitleFallsBackToViewName() {
+    void dashboardTitleFallsBackToViewName(JenkinsRule j) {
         PipelineOverviewDashboard view = new PipelineOverviewDashboard("my-view");
         assertEquals("my-view", view.getDashboardTitle());
         view.setDashboardTitle("Custom Title");
@@ -109,7 +107,7 @@ public class PipelineOverviewDashboardTest {
     }
 
     @Test
-    public void onJobRenamedUpdatesEntries() throws Exception {
+    void itemListenerUpdatesEntries(JenkinsRule j) throws Exception {
         PipelineOverviewDashboard view = new PipelineOverviewDashboard("test-view");
         j.jenkins.addView(view);
 
@@ -122,7 +120,7 @@ public class PipelineOverviewDashboardTest {
         group.setPipelines(Collections.singletonList(entry));
         view.setGroups(Collections.singletonList(group));
 
-        view.onJobRenamed(job, "old-name", "new-name");
+        job.renameTo("new-name");
         assertEquals("new-name", view.getGroups().get(0).getPipelines().get(0).getJobName());
     }
 }
