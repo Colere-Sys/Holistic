@@ -886,7 +886,12 @@ body.od-kiosk #overview-dashboard {
 }
 .pg-unstable { fill: var(--od-amber); }
 .pg-skipped { fill: rgba(77, 86, 104, 0.6); }
-.pg-building { fill: var(--od-cyan); animation: od-pulse-glow 1.5s infinite; }
+.pg-building {
+  fill: var(--od-cyan);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: od-pulse-glow 1.5s infinite;
+}
 
 .pg-line {
   stroke: rgba(255, 255, 255, 0.18);

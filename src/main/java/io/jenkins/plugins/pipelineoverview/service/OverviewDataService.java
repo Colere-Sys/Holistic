@@ -396,9 +396,22 @@ public class OverviewDataService {
 
             for (FlowNode n : stageNodes) {
                 String stageName = labelOf(n);
-                StatusExt agg = knownStatuses.containsKey(n.getId())
-                        ? knownStatuses.get(n.getId())
-                        : stageStatuses.getOrDefault(n.getId(), StatusExt.SUCCESS);
+                StatusExt nodeLevel = stageStatuses.get(n.getId());
+                StatusExt fromRunExt = knownStatuses.get(n.getId());
+                StatusExt agg;
+                if (nodeLevel != null) {
+                    // Stage actually ran — its inner FlowNodes carry the truth.
+                    agg = nodeLevel;
+                } else if (fromRunExt == StatusExt.IN_PROGRESS
+                        || fromRunExt == StatusExt.PAUSED_PENDING_INPUT) {
+                    agg = fromRunExt;
+                } else if (fromRunExt != null) {
+                    // RunExt assigned a terminal status to a stage that never executed
+                    // (the build's overall result gets propagated down). Treat as skipped.
+                    agg = StatusExt.NOT_EXECUTED;
+                } else {
+                    agg = StatusExt.SUCCESS;
+                }
                 String status = mapStageStatus(agg);
                 String parallelParentId = parallelParentIdOf(n);
 

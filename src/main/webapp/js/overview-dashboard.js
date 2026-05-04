@@ -270,29 +270,38 @@
 
   function renderBroken(data) {
     const items = data.broken || [];
-    const failures = items.filter(b => b.severity === 'failure')
-                          .sort((a, b) => (b.sinceGreenMs || 0) - (a.sinceGreenMs || 0));
+    const failures = items.filter(b => b.severity === 'failure');
+    const regressionNames = new Set((data.regressions || []).map(r => r.jobName));
+
+    // Promote fresh regressions: a pipeline that just broke is more actionable
+    // than one that's been broken for weeks. Show regressions first (newest first),
+    // then chronic failures (longest broken first) to fill remaining slots.
+    const fresh = failures.filter(b => regressionNames.has(b.jobName))
+                          .sort((a, b) => (a.sinceGreenMs || 0) - (b.sinceGreenMs || 0));
+    const chronic = failures.filter(b => !regressionNames.has(b.jobName))
+                            .sort((a, b) => (b.sinceGreenMs || 0) - (a.sinceGreenMs || 0));
+    const ordered = fresh.concat(chronic);
 
     const sec = el('section', { class: 'broken-section' });
     sec.appendChild(el('header', { class: 'section-header', html:
       '<span class="section-title">Currently Broken</span>' +
-      '<span class="section-meta">FAILURE only · sorted by severity · biggest = worst</span>'
+      '<span class="section-meta">' + ordered.length + ' total · fresh regressions first · then longest broken</span>'
     }));
 
-    if (failures.length === 0) {
+    if (ordered.length === 0) {
       sec.appendChild(el('div', { class: 'broken-grid empty', text: 'all green · no pipelines broken' }));
       return sec;
     }
 
     const grid = el('div', { class: 'broken-grid' });
-    failures.slice(0, 3).forEach((b, i) => {
+    ordered.slice(0, 3).forEach((b, i) => {
       const sev = i === 0 ? 'critical' : (i === 1 ? 'high' : 'medium');
       grid.appendChild(renderBrokenCard(b, sev));
     });
     sec.appendChild(grid);
 
-    if (failures.length > 3) {
-      const overflow = failures.slice(3);
+    if (ordered.length > 3) {
+      const overflow = ordered.slice(3);
       const strip = el('div', { class: 'broken-overflow-strip' });
       overflow.forEach(b => strip.appendChild(renderBrokenCompactCard(b)));
       sec.appendChild(strip);
