@@ -47,7 +47,6 @@
         <ban-deprecated-stapler.skip>false</ban-deprecated-stapler.skip>
         <ban-commons-lang-2.skip>false</ban-commons-lang-2.skip>
         <scmTag>${project.artifactId}-${project.version}</scmTag>
-        <disabledTestInjection>true</disabledTestInjection>
     </properties>
 
     <dependencyManagement>
@@ -75,12 +74,9 @@
             <groupId>org.jenkins-ci.plugins.pipeline-stage-view</groupId>
             <artifactId>pipeline-rest-api</artifactId>
         </dependency>
-
-        <!-- test -->
         <dependency>
-            <groupId>org.jenkins-ci.main</groupId>
-            <artifactId>jenkins-test-harness</artifactId>
-            <scope>test</scope>
+            <groupId>io.jenkins.plugins</groupId>
+            <artifactId>ionicons-api</artifactId>
         </dependency>
     </dependencies>
 
