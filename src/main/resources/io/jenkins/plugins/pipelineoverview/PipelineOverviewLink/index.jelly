@@ -1,10 +1,10 @@
 <?jelly escape-by-default='true'?>
 <j:jelly xmlns:j="jelly:core" xmlns:st="jelly:stapler" xmlns:l="/lib/layout">
 
-    <l:layout type="full-screen" title="${it.view.dashboardTitle}" norefresh="true">
+    <l:layout type="full-screen" title="${it.view.dashboardTitle}">
         <l:main-panel>
             <link rel="stylesheet"
-                  href="${rootURL}/plugin/pipeline-overview-dashboard/css/overview-dashboard.css"
+                  href="${rootURL}/plugin/holistic/css/overview-dashboard.css"
                   type="text/css" />
 
             <div id="overview-dashboard"
@@ -21,7 +21,7 @@
             </div>
 
             <script type="text/javascript"
-                    src="${rootURL}/plugin/pipeline-overview-dashboard/js/overview-dashboard.js">
+                    src="${rootURL}/plugin/holistic/js/overview-dashboard.js">
             </script>
         </l:main-panel>
     </l:layout>

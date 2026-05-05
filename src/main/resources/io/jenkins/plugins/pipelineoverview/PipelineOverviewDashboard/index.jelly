@@ -7,14 +7,14 @@
         <j:set var="layoutType" value="full-screen"/>
     </j:if>
 
-    <l:layout type="${layoutType}" title="${it.dashboardTitle}" norefresh="true">
+    <l:layout type="${layoutType}" title="${it.dashboardTitle}">
         <j:if test="${layoutType == 'two-column'}">
             <st:include page="sidepanel.jelly" it="${it}" optional="true" />
         </j:if>
 
         <l:main-panel>
             <link rel="stylesheet"
-                  href="${rootURL}/plugin/pipeline-overview-dashboard/css/overview-dashboard.css"
+                  href="${rootURL}/plugin/holistic/css/overview-dashboard.css"
                   type="text/css" />
 
             <div id="overview-dashboard"
@@ -30,7 +30,7 @@
             </div>
 
             <script type="text/javascript"
-                    src="${rootURL}/plugin/pipeline-overview-dashboard/js/overview-dashboard.js">
+                    src="${rootURL}/plugin/holistic/js/overview-dashboard.js">
             </script>
         </l:main-panel>
     </l:layout>
