@@ -85,7 +85,7 @@ body.od-kiosk #overview-dashboard {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 400px;
+  min-height: 80vh;
   gap: 14px;
   color: var(--od-text-muted);
   font-family: var(--od-font);
