@@ -36,7 +36,9 @@
 body.od-kiosk { overflow-y: auto; background: var(--od-bg); margin: 0; }
 body.od-kiosk .page-header,
 body.od-kiosk #header,
-body.od-kiosk header,
+body.od-kiosk #page-header,
+body.od-kiosk header.page-header,
+body.od-kiosk header#page-header,
 body.od-kiosk .jenkins-app-bar,
 body.od-kiosk .app-bar,
 body.od-kiosk #side-panel,
