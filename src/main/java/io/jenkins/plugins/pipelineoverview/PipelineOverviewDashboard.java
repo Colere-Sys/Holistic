@@ -3,6 +3,8 @@ package io.jenkins.plugins.pipelineoverview;
 import hudson.Extension;
 import hudson.model.Descriptor;
 import hudson.model.Item;
+import hudson.model.ItemGroup;
+import hudson.model.Items;
 import hudson.model.TopLevelItem;
 import hudson.model.View;
 import hudson.model.ViewDescriptor;
@@ -136,13 +138,19 @@ public class PipelineOverviewDashboard extends View {
         Map<String, List<DashboardEntry>> byGroup = new TreeMap<>();
         java.util.List<String> exclude = getAutoExcludeFolders();
 
+        ItemGroup<?> scope = getOwner() instanceof ItemGroup<?>
+                ? (ItemGroup<?>) getOwner() : Jenkins.get();
+        String scopePrefix = scope == Jenkins.get() ? "" : scope.getFullName() + "/";
+
         for (org.jenkinsci.plugins.workflow.job.WorkflowJob job :
-                Jenkins.get().getAllItems(org.jenkinsci.plugins.workflow.job.WorkflowJob.class)) {
+                Items.allItems(scope, org.jenkinsci.plugins.workflow.job.WorkflowJob.class)) {
             if (!job.hasPermission(Item.READ)) continue;
             String fullName = job.getFullName();
-            if (isPRBranch(fullName)) continue;
-            if (matchesAnyPrefix(fullName, exclude)) continue;
-            String g = inferGroupName(fullName);
+            String relative = scopePrefix.isEmpty() ? fullName
+                    : fullName.substring(scopePrefix.length());
+            if (isPRBranch(relative)) continue;
+            if (matchesAnyPrefix(relative, exclude)) continue;
+            String g = inferGroupName(relative);
             byGroup.computeIfAbsent(g, k -> new ArrayList<>()).add(new DashboardEntry(fullName));
         }
 
@@ -234,24 +242,27 @@ public class PipelineOverviewDashboard extends View {
         }
     }
 
-    @Override
-    public void onJobRenamed(Item item, String oldName, String newName) {
-        if (groups == null) return;
+    boolean renameJob(String oldFullName, String newFullName) {
+        if (groups == null || newFullName == null || newFullName.equals(oldFullName)) return false;
         boolean changed = false;
         for (DashboardGroup group : groups) {
             for (DashboardEntry entry : group.getPipelines()) {
-                if (entry.getJobName().equals(oldName)) {
-                    entry.setJobName(newName);
+                if (entry.getJobName().equals(oldFullName)) {
+                    entry.setJobName(newFullName);
                     changed = true;
                 }
             }
         }
-        if (changed) {
-            try { save(); }
-            catch (IOException e) {
-                LOGGER.log(Level.WARNING, "Failed to save view after job rename", e);
-            }
+        return changed;
+    }
+
+    boolean removeJob(String fullName) {
+        if (groups == null || fullName == null) return false;
+        boolean changed = false;
+        for (DashboardGroup group : groups) {
+            changed |= group.getPipelines().removeIf(e -> fullName.equals(e.getJobName()));
         }
+        return changed;
     }
 
 
