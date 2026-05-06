@@ -40,8 +40,20 @@ body.od-kiosk #side-panel,
 body.od-kiosk .jenkins-breadcrumbs,
 body.od-kiosk #breadcrumbBar,
 body.od-kiosk .page-footer,
-body.od-kiosk #footer,
-body.od-kiosk footer { display: none !important; }
+body.od-kiosk #footer { display: none !important; }
+
+/* When embedded inside Jenkins (not kiosk), inherit theme colors so the
+   dashboard matches the rest of the UI in light or dark themes. */
+body:not(.od-kiosk) #overview-dashboard {
+  --od-bg: var(--background, #0a0e14);
+  --od-bg-2: var(--background-secondary, #0d1219);
+  --od-surface: var(--card-background, #131822);
+  --od-surface-2: var(--background-tertiary, #1a2030);
+  --od-text: var(--text-color, #eaf0f7);
+  --od-text-muted: var(--text-color-secondary, #8593a8);
+  --od-border: var(--medium-grey, #262e3e);
+  --od-border-strong: var(--text-color-secondary, #3a4458);
+}
 body.od-kiosk #main-panel,
 body.od-kiosk .jenkins-app-bar,
 body.od-kiosk .app-bar { padding: 0 !important; margin: 0 !important; }
@@ -198,9 +210,30 @@ body.od-kiosk #overview-dashboard {
   text-shadow: 0 0 24px var(--od-red-glow);
 }
 .vital.warn .vital-value { color: var(--od-amber); }
-.vital.info .vital-value { color: var(--od-blue); }
+.vital.od-info .vital-value { color: var(--od-blue); }
 
-.cmd-clock { text-align: right; }
+.od-kiosk-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px; height: 30px;
+  margin-bottom: 4px;
+  border: 1px solid var(--od-border-strong);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--od-text-muted);
+  text-decoration: none;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.od-kiosk-toggle:hover {
+  color: var(--od-text);
+  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.08);
+  text-decoration: none;
+}
+.od-kiosk-toggle svg { width: 14px; height: 14px; }
+
+.cmd-clock { text-align: right; display: flex; flex-direction: column; align-items: flex-end; }
 .cmd-time {
   font-family: var(--od-mono);
   font-size: 26px;

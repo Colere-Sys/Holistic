@@ -15,7 +15,7 @@
                  data-header-message="${it.view.headerMessage}"
                  data-fullscreen="true">
                 <div class="od-loading">
-                    <div class="od-loading-spinner"></div>
+                    <l:spinner />
                     <p>Loading dashboard data&#8230;</p>
                 </div>
             </div>

@@ -1,8 +1,6 @@
 <?jelly escape-by-default='true'?>
 <j:jelly xmlns:j="jelly:core">
-    <p>
-        A TV-optimised dashboard showing pipeline health, build velocity,
-        failure tracking, and trend data.  Designed for information radiators
-        and tech-lead overviews.
-    </p>
+    A TV-optimised dashboard showing pipeline health, build velocity,
+    failure tracking, and trend data. Designed for information radiators
+    and tech-lead overviews.
 </j:jelly>
