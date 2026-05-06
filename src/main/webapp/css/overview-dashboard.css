@@ -36,6 +36,9 @@
 body.od-kiosk { overflow-y: auto; background: var(--od-bg); margin: 0; }
 body.od-kiosk .page-header,
 body.od-kiosk #header,
+body.od-kiosk header,
+body.od-kiosk .jenkins-app-bar,
+body.od-kiosk .app-bar,
 body.od-kiosk #side-panel,
 body.od-kiosk .jenkins-breadcrumbs,
 body.od-kiosk #breadcrumbBar,
@@ -46,13 +49,15 @@ body.od-kiosk #footer { display: none !important; }
    dashboard matches the rest of the UI in light or dark themes. */
 body:not(.od-kiosk) #overview-dashboard {
   --od-bg: var(--background, #0a0e14);
-  --od-bg-2: var(--background-secondary, #0d1219);
+  --od-bg-2: var(--background-secondary, var(--background, #0d1219));
   --od-surface: var(--card-background, #131822);
-  --od-surface-2: var(--background-tertiary, #1a2030);
+  --od-surface-2: var(--button-background, var(--background-secondary, #1a2030));
+  --od-surface-3: var(--button-background--focus, var(--background, #232a3a));
   --od-text: var(--text-color, #eaf0f7);
   --od-text-muted: var(--text-color-secondary, #8593a8);
-  --od-border: var(--medium-grey, #262e3e);
-  --od-border-strong: var(--text-color-secondary, #3a4458);
+  --od-text-dim: var(--text-color-secondary, #4d5668);
+  --od-border: var(--medium-grey, var(--card-border-color, #262e3e));
+  --od-border-strong: var(--dark-grey, var(--text-color-secondary, #3a4458));
 }
 body.od-kiosk #main-panel,
 body.od-kiosk .jenkins-app-bar,
@@ -1167,6 +1172,14 @@ body.od-kiosk #overview-dashboard {
   font-size: 11.5px;
   font-family: var(--od-mono);
   font-weight: 500;
+  color: var(--od-text);
+  text-decoration: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+.agent:hover {
+  border-color: var(--od-border-strong);
+  background: var(--od-surface-3);
+  text-decoration: none;
 }
 .agent-dot { width: 7px; height: 7px; border-radius: 50%; }
 .agent.ok .agent-dot { background: var(--od-green); box-shadow: 0 0 6px var(--od-green-glow); }

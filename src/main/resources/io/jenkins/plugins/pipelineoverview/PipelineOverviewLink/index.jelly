@@ -13,7 +13,9 @@
                  data-refresh-interval="${it.view.refreshIntervalSeconds}"
                  data-dashboard-title="${it.view.dashboardTitle}"
                  data-header-message="${it.view.headerMessage}"
-                 data-fullscreen="true">
+                 data-fullscreen="true"
+                 data-crumb-field="${h.getCrumbRequestField()}"
+                 data-crumb-value="${h.getCrumb(request)}">
                 <div class="od-loading">
                     <l:spinner />
                     <p>Loading dashboard data&#8230;</p>

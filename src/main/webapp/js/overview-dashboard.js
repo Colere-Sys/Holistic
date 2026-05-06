@@ -10,6 +10,8 @@
   const kiosk      = new URLSearchParams(window.location.search).has('kiosk');
   const fullscreen = root.dataset.fullscreen === 'true';
   const rootUrl    = root.dataset.rootUrl || '/';
+  const crumbField = root.dataset.crumbField || '';
+  const crumbValue = root.dataset.crumbValue || '';
 
   if (kiosk || fullscreen) document.body.classList.add('od-kiosk');
 
@@ -157,16 +159,17 @@
     }).join('');
 
     const backHtml = fullscreen
-      ? '<a class="jenkins-button cmd-back" href="' + escapeHtml(rootUrl) + '" title="Back to Jenkins">'
-        + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">'
+      ? '<a class="cmd-back" href="' + escapeHtml(rootUrl) + '" title="Back to Jenkins">'
+        + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">'
         + '<line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>'
         + '</svg><span>Jenkins</span></a>'
       : '';
 
-    const kioskToggleHtml = '<a class="jenkins-button od-kiosk-toggle" href="' +
+    const kioskToggleHtml = '<a class="od-kiosk-toggle" href="' +
       escapeHtml(kioskToggleUrl()) + '" title="' +
       (kiosk ? 'Exit kiosk mode' : 'Enter kiosk mode') + '">' +
-      svgIcon(kiosk ? 'shrink' : 'expand') + '</a>';
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
+      ICONS[kiosk ? 'shrink' : 'expand'] + '</svg></a>';
 
     return el('header', { class: 'cmd-strip', html:
       '<div class="cmd-title">' +
@@ -956,7 +959,10 @@
 
     const permHtml = perm.map(a => {
       const cls = a.status === 'down' ? 'down' : (a.status === 'partial' ? 'partial' : 'ok');
-      return '<div class="agent ' + cls + '"><span class="agent-dot"></span>' + escapeHtml(a.name) + '</div>';
+      const href = rootUrl + 'computer/' + encodeURIComponent(a.name) + '/';
+      return '<a class="agent ' + cls + '" href="' + escapeHtml(href) +
+        '" title="Open ' + escapeHtml(a.name) + '"><span class="agent-dot"></span>' +
+        escapeHtml(a.name) + '</a>';
     }).join('');
 
     const cloudsHtml = clouds.map(c => {
@@ -1012,7 +1018,9 @@
     const xhr = new XMLHttpRequest();
     xhr.open('POST', dataUrl, true);
     xhr.setRequestHeader('Accept', 'application/json');
-    if (typeof crumb !== 'undefined' && crumb && crumb.fieldName) {
+    if (crumbField && crumbValue) {
+      xhr.setRequestHeader(crumbField, crumbValue);
+    } else if (typeof crumb !== 'undefined' && crumb && crumb.fieldName) {
       xhr.setRequestHeader(crumb.fieldName, crumb.value);
     }
     xhr.timeout = 30000;
