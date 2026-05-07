@@ -293,7 +293,7 @@ public class PipelineOverviewDashboard extends View {
 
 
     @Extension
-    @Symbol("pipelineOverviewDashboard")
+    @Symbol("holistic")
     public static class DescriptorImpl extends ViewDescriptor {
 
         @Override
