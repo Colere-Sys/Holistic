@@ -399,12 +399,18 @@ public class OverviewDataService {
                 StatusExt nodeLevel = stageStatuses.get(n.getId());
                 StatusExt fromRunExt = knownStatuses.get(n.getId());
                 StatusExt agg;
-                if (nodeLevel != null) {
+                if (fromRunExt == StatusExt.IN_PROGRESS
+                        || fromRunExt == StatusExt.PAUSED_PENDING_INPUT
+                        || nodeLevel == StatusExt.IN_PROGRESS
+                        || nodeLevel == StatusExt.PAUSED_PENDING_INPUT) {
+                    // Stage is currently running — show that, regardless of any
+                    // partial inner-step success.
+                    agg = nodeLevel != null && nodeLevel == StatusExt.PAUSED_PENDING_INPUT
+                            ? nodeLevel
+                            : (fromRunExt != null ? fromRunExt : nodeLevel);
+                } else if (nodeLevel != null) {
                     // Stage actually ran — its inner FlowNodes carry the truth.
                     agg = nodeLevel;
-                } else if (fromRunExt == StatusExt.IN_PROGRESS
-                        || fromRunExt == StatusExt.PAUSED_PENDING_INPUT) {
-                    agg = fromRunExt;
                 } else if (fromRunExt != null) {
                     // RunExt assigned a terminal status to a stage that never executed
                     // (the build's overall result gets propagated down). Treat as skipped.
