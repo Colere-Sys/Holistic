@@ -12,7 +12,7 @@ below that:
 
 * **stage outbreak** clusters broken pipelines by which stage they failed at. when 5 pipelines all break at "Deploy" or "E2E Tests" it's almost always a shared library or shared infra problem and you want to know fast.
 * **just regressed** flags pipelines that were green for at least 6h then broke in the last 24h. the scariest class of failure because something just changed.
-* **currently broken** shows pipelines whose latest build failed, sorted by how long they've been broken. biggest card = worst.
+* **currently broken** shows pipelines whose latest build failed. fresh regressions (broke in the last 24h after >= 6h green) get the top cards so today's actionable failures don't get buried; the rest follow, longest-broken first.
 * **currently unstable** is its own smaller section, separate from broken, since "tests failed but build completed" is a different problem from "the build itself blew up".
 * **pipeline health** expands per group, each pipeline rendered like jenkins' native stage view but smaller, with curved bezier connectors and parallel branches fanning out vertically.
 * **exec time graph** per pipeline shows the last 30 *successful* build durations as a sparkline + avg + range. trend chip lights up amber if builds are getting consistently slower (↑ %) or green if faster (↓ %).
@@ -26,11 +26,11 @@ clicking the "Pipeline Overview" entry in the jenkins sidebar opens the dashboar
 
 not on the jenkins update site. two ways:
 
-**drop the HPI in.** download `pipeline-overview-dashboard.hpi` from a release (or `mvn package` it yourself), put it in `$JENKINS_HOME/plugins/`, restart jenkins.
+**drop the HPI in.** download `holistic.hpi` from a release (or `mvn package` it yourself), put it in `$JENKINS_HOME/plugins/`, restart jenkins.
 
 **bake it into a docker image.**
 ```dockerfile
-COPY pipeline-overview-dashboard.hpi /usr/share/jenkins/ref/plugins/
+COPY holistic.hpi /usr/share/jenkins/ref/plugins/
 ```
 with `PLUGINS_FORCE_UPGRADE=true` so a newer bundled HPI replaces an older one on the persistent volume.
 
@@ -41,7 +41,7 @@ JCasC. simplest setup, auto-discover everything jenkins knows about:
 ```yaml
 jenkins:
   views:
-    - pipelineOverviewDashboard:
+    - holistic:
         name: "Pipeline Overview"
         autoDiscover: true
 ```
@@ -53,7 +53,7 @@ if you want a curated subset instead:
 ```yaml
 jenkins:
   views:
-    - pipelineOverviewDashboard:
+    - holistic:
         name: "Pipeline Overview"
         refreshIntervalSeconds: 30
         historyDays: 30
@@ -91,7 +91,7 @@ other knobs:
 | queue / avg wait | live `Jenkins.get().getQueue().getItems()` count + avg time items have been waiting |
 | agents | healthy / total **permanent** agents (cloud agents shown separately at the bottom) |
 | just regressed | green for >= 6h, broke in the last 24h |
-| stage status (per pipeline) | hybrid: pipeline-rest-api's `RunExt.getStages()` for outer stages (knows UNSTABLE), graph-walked aggregation for inner parallel branches that pipeline-rest-api filters out |
+| stage status (per pipeline) | FlowGraph node-level statuses are the source of truth, including aggregation across inner parallel branches that pipeline-rest-api filters out. `RunExt.getStages()` is consulted only to surface `IN_PROGRESS` / `PAUSED_PENDING_INPUT` while a build is mid-flight; if it reports a terminal status on a stage with no actual node activity (the build's overall result getting propagated down to stages that never ran), that's treated as `NOT_EXECUTED` so downstream stages render skipped instead of red |
 | exec time graph | last 30 *successful* runs only. failed/aborted would skew the trend |
 
 ## live preview
@@ -104,7 +104,7 @@ open `docs/preview.html` in a browser. it mocks the data so the dashboard render
 mvn package
 ```
 
-needs JDK 17+, maven 3.6+. targets jenkins 2.492+. depends on `workflow-api`, `workflow-job`, `pipeline-rest-api`. `lockable-resources` is detected at runtime via reflection so you don't need to install it.
+needs JDK 17+, maven 3.6+. targets jenkins 2.541+. depends on `workflow-api`, `workflow-job`, `pipeline-rest-api`, `ionicons-api`. `lockable-resources` is detected at runtime via reflection so you don't need to install it.
 
 ## stuff worth knowing
 
