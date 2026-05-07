@@ -27,7 +27,7 @@ class PipelineOverviewDashboardTest {
             }
         }
         assertNotNull(descriptor, "PipelineOverviewDashboard descriptor should be registered");
-        assertEquals("Pipeline Overview Dashboard", descriptor.getDisplayName());
+        assertEquals("Holistic", descriptor.getDisplayName());
     }
 
     @Test
